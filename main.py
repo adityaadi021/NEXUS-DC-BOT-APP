@@ -837,9 +837,15 @@ class WelcomeConfigModal(Modal, title='Configure Welcome'):
 # Updated set-welcome command
 @bot.tree.command(name="set-welcome", description="Configure welcome messages (Admin only)")
 @app_commands.describe(
-    welcome_channel="Channel to send welcome messages"
+    welcome_channel="Channel to send welcome messages",
+    welcome_message="(Optional) Custom welcome DM message",
+    image_url="(Optional) URL of image for welcome DM"
 )
-async def set_welcome(interaction: discord.Interaction, welcome_channel: discord.TextChannel):
+async def set_welcome(interaction: discord.Interaction, 
+                     welcome_channel: discord.TextChannel,
+                     welcome_message: Optional[str] = None,
+                     image_url: Optional[str] = None):
+    """Configure welcome system with optional custom DM message"""
     if not interaction.user.guild_permissions.manage_guild:
         await interaction.response.send_message(
             embed=create_embed(
@@ -851,7 +857,52 @@ async def set_welcome(interaction: discord.Interaction, welcome_channel: discord
         )
         return
     
-    await interaction.response.send_modal(WelcomeConfigModal(welcome_channel))
+    guild_id = str(interaction.guild.id)
+    
+    # Initialize guild config
+    if guild_id not in guild_configs:
+        guild_configs[guild_id] = {}
+    
+    # Save welcome channel
+    guild_configs[guild_id]["welcome_channel"] = welcome_channel.id
+    
+    # Handle custom DM message
+    if welcome_message:
+        # Save custom message if provided
+        guild_configs[guild_id]["welcome_dm"] = welcome_message
+        msg_status = f"✅ Custom DM message set"
+    else:
+        # Remove custom message to use fallback
+        if "welcome_dm" in guild_configs[guild_id]:
+            del guild_configs[guild_id]["welcome_dm"]
+        msg_status = "ℹ️ Using default DM welcome message"
+    
+    # Handle image URL
+    if image_url:
+        guild_configs[guild_id]["dm_attachment_url"] = image_url
+        img_status = f"✅ Image URL set"
+    else:
+        if "dm_attachment_url" in guild_configs[guild_id]:
+            del guild_configs[guild_id]["dm_attachment_url"]
+        img_status = "ℹ️ No welcome image configured"
+    
+    save_config()
+    
+    # Build confirmation message
+    confirmation = (
+        f"**Welcome channel:** {welcome_channel.mention}\n"
+        f"**DM Message:** {msg_status}\n"
+        f"**Image:** {img_status}"
+    )
+    
+    await interaction.response.send_message(
+        embed=create_embed(
+            title="✅ Welcome System Configured",
+            description=confirmation,
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
 
 @bot.event
 async def on_member_join(member: discord.Member):
