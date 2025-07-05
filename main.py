@@ -14,6 +14,8 @@ from googleapiclient.errors import HttpError
 from flask import Flask
 from threading import Thread
 
+print("🚀 Bot is starting...")
+
 app = Flask(__name__)
 
 @app.route('/')
