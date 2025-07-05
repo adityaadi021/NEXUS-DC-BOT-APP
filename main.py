@@ -11,6 +11,18 @@ import requests
 from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
 
 # Get token from environment
 token = os.getenv("DISCORD_TOKEN")
@@ -1434,6 +1446,7 @@ async def on_guild_remove(guild):
         save_social_trackers()
 
 try:
+    Thread(target=run).start()
     bot.run(token)
 except discord.PrivilegedIntentsRequired:
     print("\n❌ PRIVILEGED INTENTS REQUIRED ❌")
