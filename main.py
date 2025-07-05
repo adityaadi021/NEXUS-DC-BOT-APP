@@ -1450,7 +1450,7 @@ async def on_guild_remove(guild):
         save_social_trackers()
 
 try:
-    Thread(target=run).start()
+    Thread(target=run_flask).start()
     bot.run(token)
 except discord.PrivilegedIntentsRequired:
     print("\n❌ PRIVILEGED INTENTS REQUIRED ❌")
