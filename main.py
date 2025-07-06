@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Modal, TextInput
+from discord.ui import Modal, TextInput, View, Select
 import os
 import json
 from datetime import datetime
@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from flask import Flask
 from threading import Thread
+
 
 print("🚀 Bot is starting...")
 
@@ -97,72 +98,72 @@ def save_event_schedule():
 
 from dateutil.parser import parse as parse_datetime  # Add at the top if not already imported
 
-@bot.tree.command(name="add-tournament-event", description="Schedule a tournament event")
-@app_commands.describe(
-    title="Title of the tournament event",
-    description="Details of the event",
-    time="Start time (e.g., 2025-07-10 18:00)",
-    channel="Channel where event reminder will be posted",
-    ping_role="Role to ping when reminder is sent",
-    image_url="Optional image URL for embed"
-)
-async def add_tournament_event(interaction: discord.Interaction,
-                               title: str,
-                               description: str,
-                               time: str,
-                               channel: discord.TextChannel,
-                               ping_role: Optional[discord.Role] = None,
-                               image_url: Optional[str] = None):
-    """Add a tournament event to the schedule"""
-    if not interaction.user.guild_permissions.manage_guild:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="You need 'Manage Server' permission",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
+# @bot.tree.command(name="add-tournament-event", description="Schedule a tournament event")
+# @app_commands.describe(
+#     title="Title of the tournament event",
+#     description="Details of the event",
+#     time="Start time (e.g., 2025-07-10 18:00)",
+#     channel="Channel where event reminder will be posted",
+#     ping_role="Role to ping when reminder is sent",
+#     image_url="Optional image URL for embed"
+# )
+# async def add_tournament_event(interaction: discord.Interaction,
+#                                title: str,
+#                                description: str,
+#                                time: str,
+#                                channel: discord.TextChannel,
+#                                ping_role: Optional[discord.Role] = None,
+#                                image_url: Optional[str] = None):
+#     """Add a tournament event to the schedule"""
+#     if not interaction.user.guild_permissions.manage_guild:
+#         return await interaction.response.send_message(
+#             embed=create_embed(
+#                 title="❌ Permission Denied",
+#                 description="You need 'Manage Server' permission",
+#                 color=discord.Color.red()
+#             ),
+#             ephemeral=True
+#         )
 
-    try:
-        event_time = parse_datetime(time)
-        now = datetime.utcnow()
-        if event_time < now:
-            raise ValueError("Event time must be in the future")
-    except Exception as e:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Invalid Time Format",
-                description="Use format like: `2025-07-10 18:00`",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
+#     try:
+#         event_time = parse_datetime(time)
+#         now = datetime.utcnow()
+#         if event_time < now:
+#             raise ValueError("Event time must be in the future")
+#     except Exception as e:
+#         return await interaction.response.send_message(
+#             embed=create_embed(
+#                 title="❌ Invalid Time Format",
+#                 description="Use format like: `2025-07-10 18:00`",
+#                 color=discord.Color.red()
+#             ),
+#             ephemeral=True
+#         )
 
-    guild_id = str(interaction.guild.id)
-    if guild_id not in event_schedule:
-        event_schedule[guild_id] = []
+#     guild_id = str(interaction.guild.id)
+#     if guild_id not in event_schedule:
+#         event_schedule[guild_id] = []
 
-    event_schedule[guild_id].append({
-        "title": title,
-        "description": description,
-        "time": event_time.isoformat(),
-        "channel_id": channel.id,
-        "ping_role_id": ping_role.id if ping_role else None,
-        "image_url": image_url,
-        "notified": False
-    })
+#     event_schedule[guild_id].append({
+#         "title": title,
+#         "description": description,
+#         "time": event_time.isoformat(),
+#         "channel_id": channel.id,
+#         "ping_role_id": ping_role.id if ping_role else None,
+#         "image_url": image_url,
+#         "notified": False
+#     })
 
-    save_event_schedule()
+#     save_event_schedule()
 
-    await interaction.response.send_message(
-        embed=create_embed(
-            title="✅ Tournament Event Scheduled",
-            description=f"**{title}** scheduled for `{event_time}` in {channel.mention}",
-            color=discord.Color.green()
-        ),
-        ephemeral=True
-    )
+#     await interaction.response.send_message(
+#         embed=create_embed(
+#             title="✅ Tournament Event Scheduled",
+#             description=f"**{title}** scheduled for `{event_time}` in {channel.mention}",
+#             color=discord.Color.green()
+#         ),
+#         ephemeral=True
+#     )
 
 @bot.tree.command(name="list-tournament-events", description="List upcoming tournament events")
 async def list_tournament_events(interaction: discord.Interaction):
@@ -669,6 +670,103 @@ async def sync_commands(interaction: discord.Interaction):
             color=discord.Color(0x3e0000)
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ChannelSelect(discord.ui.Select):
+    def __init__(self, channels):
+        options = [
+            discord.SelectOption(label=channel.name, value=str(channel.id))
+            for channel in channels if isinstance(channel, discord.TextChannel)
+        ][:25]  # Discord allows max 25 options
+
+        super().__init__(
+            placeholder="Select a channel to send the event notification",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TournamentEventView = self.view
+        view.selected_channel_id = int(self.values[0])
+        await interaction.response.send_modal(view.modal)
+
+class TournamentEventModal(Modal, title="📅 Schedule Tournament Event"):
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+        self.title_input = TextInput(label="Event Title", placeholder="e.g., Grand Finals")
+        self.description_input = TextInput(label="Description", style=discord.TextStyle.paragraph, required=True)
+        self.datetime_input = TextInput(label="Start Time (YYYY-MM-DD HH:MM UTC)", placeholder="e.g., 2025-07-10 18:30")
+        self.role_input = TextInput(label="Ping Role ID or @mention (optional)", required=False)
+        self.image_input = TextInput(label="Image URL (optional)", required=False)
+
+        self.add_item(self.title_input)
+        self.add_item(self.description_input)
+        self.add_item(self.datetime_input)
+        self.add_item(self.role_input)
+        self.add_item(self.image_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        from dateutil.parser import parse as parse_datetime
+
+        try:
+            event_time = parse_datetime(self.datetime_input.value)
+            if event_time < datetime.utcnow():
+                raise ValueError("Event time must be in the future.")
+
+            role_id = None
+            if self.role_input.value:
+                if self.role_input.value.startswith("<@&"):
+                    role_id = int(self.role_input.value[3:-1])
+                else:
+                    role_id = int(self.role_input.value.strip())
+
+            channel = interaction.guild.get_channel(self.view.selected_channel_id)
+            if not channel:
+                raise ValueError("Channel not found.")
+
+            guild_id = str(interaction.guild.id)
+            if guild_id not in event_schedule:
+                event_schedule[guild_id] = []
+
+            event_schedule[guild_id].append({
+                "title": self.title_input.value,
+                "description": self.description_input.value,
+                "time": event_time.isoformat(),
+                "channel_id": channel.id,
+                "ping_role_id": role_id,
+                "image_url": self.image_input.value or None,
+                "notified": False
+            })
+            save_event_schedule()
+
+            embed = discord.Embed(
+                title=f"✅ {self.title_input.value} Scheduled",
+                description=self.description_input.value,
+                color=discord.Color.green()
+            )
+            embed.add_field(name="📅 Start Time", value=f"<t:{int(event_time.timestamp())}:F>")
+            embed.add_field(name="📢 Channel", value=channel.mention)
+            if role_id:
+                embed.add_field(name="👥 Ping Role", value=f"<@&{role_id}>")
+            if self.image_input.value:
+                embed.set_image(url=self.image_input.value)
+
+            await interaction.response.send_message(embed=embed)
+
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=create_embed("❌ Error", str(e), color=discord.Color.red()),
+                ephemeral=True
+            )
+
+class TournamentEventView(View):
+    def __init__(self, channels):
+        super().__init__(timeout=120)
+        self.modal = TournamentEventModal(self)
+        self.selected_channel_id = None
+        self.add_item(ChannelSelect(channels))
 
 # Modal for announcement text
 class AnnouncementModal(Modal, title='Create Announcement'):
