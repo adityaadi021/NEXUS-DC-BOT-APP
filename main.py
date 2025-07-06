@@ -165,6 +165,23 @@ from dateutil.parser import parse as parse_datetime  # Add at the top if not alr
 #         ephemeral=True
 #     )
 
+@bot.tree.command(name="add-tournament-event", description="Open a form to schedule a tournament event")
+async def add_tournament_event(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(
+            embed=create_embed("❌ Permission Denied", "You need 'Manage Server' permission", discord.Color.red()),
+            ephemeral=True
+        )
+        return
+
+    channels = interaction.guild.text_channels
+    await interaction.response.send_message(
+        content="Select a channel to begin:",
+        view=TournamentEventView(channels),
+        ephemeral=True
+    )
+
+
 @bot.tree.command(name="list-tournament-events", description="List upcoming tournament events")
 async def list_tournament_events(interaction: discord.Interaction):
     guild_id = str(interaction.guild.id)
