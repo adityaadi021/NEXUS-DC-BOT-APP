@@ -935,6 +935,8 @@ async def on_member_join(member: discord.Member):
                     ),
                     color=discord.Color(0x3e0000)
                 )
+                # Set member's avatar as thumbnail
+                embed.set_thumbnail(url=member.display_avatar.url)  # <-- ADD THIS LINE
                 # Set GIF
                 embed.set_image(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
                 
