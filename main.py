@@ -208,6 +208,13 @@ async def remove_tournament_event(interaction: discord.Interaction, index: int):
         ephemeral=True
     )
 
+@bot.tree.command(name="force-sync", description="Force resync all commands")
+async def force_sync(interaction: discord.Interaction):
+    try:
+        await bot.tree.sync()
+        await interaction.response.send_message("✅ Slash commands globally resynced.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Sync failed: {e}", ephemeral=True)
 
 # Social tracker storage
 SOCIAL_FILE = "social_trackers.json"
