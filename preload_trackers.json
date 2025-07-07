@@ -1,26 +1,44 @@
-[
-  {
-    "guild_id": "1302161026648768523",
-    "platform": "youtube",
-    "url": "https://youtube.com/@acronelive",
-    "post_channel_id": "1377956817606283264"
-  },
-  {
-    "guild_id": "1302161026648768523",
-    "platform": "youtube",
-    "url": "https://youtube.com/@nexus_esports_official",
-    "post_channel_id": "1377956817606283264"
-  },
-  {
-    "guild_id": "1302161026648768523",
-    "platform": "youtube",
-    "url": "https://youtube.com/@justin_live_08",
-    "post_channel_id": "1377956817606283264"
-  },
-  {
-    "guild_id": "1302161026648768523",
-    "platform": "youtube",
-    "url": "https://youtube.com/@therk-freefire",
-    "post_channel_id": "1377956817606283264"
-  }
-]
+{
+  "1302161026648768523": [
+    {
+      "platform": "youtube",
+      "url": "https://youtube.com/@acronelive",
+      "channel_id": "UCUVkNq0RiGP1ouAdImiN8GQ",
+      "account_name": "Acrone Live",
+      "last_count": 0,
+      "last_video_id": "null",
+      "last_live_video_id": "null",
+      "post_channel": "1377956817606283264"
+    },
+    {
+      "platform": "youtube",
+      "url": "https://youtube.com/@nexus_esports_official",
+      "channel_id": "UCll9LjIikgGuqKralqz7tEQ",
+      "account_name": "Nexus eSports",
+      "last_count": 0,
+      "last_video_id": "null",
+      "last_live_video_id": "null",
+      "post_channel": "1377956817606283264"
+    },
+    {
+      "platform": "youtube",
+      "url": "https://youtube.com/@justin_live_08",
+      "channel_id": "UCdkdlulrwjF9hVZ-5JE9kYg",
+      "account_name": "JUSTIN xis",
+      "last_count": 0,
+      "last_video_id": "null",
+      "last_live_video_id": "null",
+      "post_channel": "1377956817606283264"
+    },
+    {
+      "platform": "youtube",
+      "url": "https://youtube.com/@therk-freefire",
+      "channel_id": "UC_wkYHUFjD7zUDpeJLWTWaw",
+      "account_name": "THE RK",
+      "last_count": 0,
+      "last_video_id": "null",
+      "last_live_video_id": "null",
+      "post_channel": "1377956817606283264"
+    }
+  ]
+}
