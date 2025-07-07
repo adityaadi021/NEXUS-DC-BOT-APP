@@ -345,7 +345,19 @@ async def check_social_updates():
                     await check_instagram_update(guild_id, tracker)
             except Exception as e:
                 print(f"⚠️ Error checking {tracker['platform']} tracker: {e}")
-
+                
+try:
+    # Existing YouTube checking code
+except HttpError as e:
+    if e.resp.status == 403:
+        print(f"⚠️ YouTube API quota exceeded for {tracker['account_name']}")
+    else:
+        print(f"⚠️ YouTube API error: {e}")
+    return
+except Exception as e:
+    print(f"⚠️ YouTube check failed: {e}")
+    return
+    
 async def check_youtube_update(guild_id, tracker):
     if not youtube_service:
         return
@@ -364,10 +376,11 @@ async def check_youtube_update(guild_id, tracker):
         snippet = response['items'][0]['snippet']
         channel_name = snippet['title']
         sub_count_raw = stats.get('subscriberCount')
-        if not sub_count_raw or not sub_count_raw.isdigit():
-            print(f"⚠️ Skipping update for {tracker['account_name']} — invalid or missing sub count.")
-            return  # Don't update anything
-        current_subs = int(sub_count_raw)
+        sub_count_raw = stats.get('subscriberCount')
+            if not sub_count_raw or not sub_count_raw.isdigit():
+                print(f"⚠️ Skipping {tracker['account_name']} - invalid sub count")
+                return
+            current_subs = int(sub_count_raw)
 
         
         last_subs = tracker.get('last_count', 0)
@@ -410,6 +423,10 @@ async def check_youtube_update(guild_id, tracker):
         if upload_res.get('items'):
             latest_video = upload_res['items'][0]
             video_id = latest_video['id']['videoId']
+            if tracker.get("last_video_id") != video_id and video_id is not None:
+                # Send notification
+                tracker["last_video_id"] = video_id
+                save_social_trackers()
             video_title = latest_video['snippet']['title']
             publish_time = latest_video['snippet']['publishedAt']
 
@@ -441,7 +458,11 @@ async def check_youtube_update(guild_id, tracker):
         live_res = live_req.execute()
         if live_res.get('items'):
             live_video = live_res['items'][0]
-            live_video_id = live_video['id']['videoId']
+            live_video_id = live_res['items'][0]['id']['videoId']
+            if tracker.get("last_live_video_id") != live_video_id and live_video_id is not None:
+                # Send notification
+                tracker["last_live_video_id"] = live_video_id
+                save_social_trackers()
             live_title = live_video['snippet']['title']
             live_thumb = live_video['snippet']['thumbnails']['high']['url']
 
