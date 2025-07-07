@@ -389,27 +389,6 @@ async def check_youtube_update(guild_id, tracker):
                 await channel.send(embed=embed)
 
 
-            channel = bot.get_channel(int(tracker['post_channel']))
-            if channel:
-                embed = discord.Embed(
-                    title="🎉 YouTube Milestone Reached!",
-                    description=(
-                        f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
-                        f"`+{current_subs - last_subs:,}` since last update"
-                    ),
-                    color=discord.Color.red(),
-                    url=tracker['url']
-                )
-                embed = discord.Embed(
-                title=f"🎬 New Upload from {channel_name}",
-                description=f"```{video_title}```\n[▶️ Watch Now](https://youtu.be/{video_id})",
-                color=discord.Color.red(),
-                timestamp=datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
-                )
-                embed.set_image(url=latest_video['snippet']['thumbnails']['high']['url'])
-
-                await channel.send(embed=embed)
-
         # --- New Upload Detection ---
         upload_req = youtube_service.search().list(
             part="snippet",
