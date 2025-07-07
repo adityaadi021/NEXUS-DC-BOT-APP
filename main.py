@@ -363,7 +363,13 @@ async def check_youtube_update(guild_id, tracker):
         stats = response['items'][0]['statistics']
         snippet = response['items'][0]['snippet']
         channel_name = snippet['title']
-        current_subs = int(stats['subscriberCount'])
+        sub_count_raw = stats.get('subscriberCount')
+        if not sub_count_raw or not sub_count_raw.isdigit():
+            print(f"⚠️ Skipping update for {tracker['account_name']} — invalid or missing sub count.")
+            return  # Don't update anything
+        current_subs = int(sub_count_raw)
+
+        
         last_subs = tracker.get('last_count', 0)
 
         # ✅ Auto-fix corrupted or missing count
