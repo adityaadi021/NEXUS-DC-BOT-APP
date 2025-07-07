@@ -1572,7 +1572,7 @@ async def add_social_tracker(interaction: discord.Interaction,
                 )
 
             
-            search_res = search_req.execute()
+            
             latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
             
             account_info['last_video_id'] = latest_video_id
@@ -1599,7 +1599,28 @@ async def add_social_tracker(interaction: discord.Interaction,
                 maxResults=1,
                 type="video"
             )
+
+            # ✅ Get latest video ID to prevent false trigger
+            search_req = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                order="date",
+                maxResults=1,
+                type="video"
+            )
+            search_res = search_req.execute()
+            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else "null"
             
+            # ✅ Get latest live video ID
+            search_live = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                eventType="live",
+                type="video",
+                maxResults=1
+            ).execute()
+            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else "null"
+
             # Get initial stats with valid channel_id
             request = youtube_service.channels().list(
                 part='statistics,snippet',
@@ -1624,8 +1645,11 @@ async def add_social_tracker(interaction: discord.Interaction,
                 'channel_id': channel_id,
                 'account_name': response['items'][0]['snippet']['title'],
                 'last_count': int(stats['subscriberCount']),
+                'last_video_id': latest_video_id,
+                'last_live_video_id': latest_live_id,
                 'post_channel': str(post_channel.id)
             }
+
         
         elif platform == "instagram":
             # Extract username from URL
