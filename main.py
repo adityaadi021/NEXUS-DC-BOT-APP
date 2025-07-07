@@ -1575,17 +1575,17 @@ async def add_social_tracker(interaction: discord.Interaction,
                 )
             
             channel_id = None
-
+        
             # Extract channel ID from URL
             if "youtube.com/channel/" in account_url:
                 channel_id = account_url.split("youtube.com/channel/")[1].split("/")[0].split("?")[0]
             elif "youtube.com/@" in account_url:
                 handle = account_url.split("youtube.com/@")[1].split("/")[0].split("?")[0]
                 
-                # Use channels().list with forHandle parameter
+                # CORRECTED PARAMETER: Use forUsername instead of forHandle
                 request = youtube_service.channels().list(
                     part="id,snippet",
-                    forHandle=handle
+                    forUsername=handle
                 )
                 response = request.execute()
                 
@@ -1599,7 +1599,7 @@ async def add_social_tracker(interaction: discord.Interaction,
                         ephemeral=True
                     )
                     
-                channel_id = response['items'][0]['id']  # Exact match
+                channel_id = response['items'][0]['id']
             else:
                 return await interaction.response.send_message(
                     embed=create_embed(
@@ -1609,37 +1609,8 @@ async def add_social_tracker(interaction: discord.Interaction,
                     ),
                     ephemeral=True
                 )
-
-            
-            
-            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
-            
-            account_info['last_video_id'] = latest_video_id
-            
-            # Fetch latest live video ID to prevent false live trigger
-            search_live = youtube_service.search().list(
-                part="id",
-                channelId=channel_id,
-                eventType="live",
-                type="video",
-                maxResults=1
-            ).execute()
-            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
-            
-            account_info['last_live_video_id'] = latest_live_id
-
-            
-            
-            # Fetch latest video ID to prevent false trigger
-            search_req = youtube_service.search().list(
-                part="id",
-                channelId=channel_id,
-                order="date",
-                maxResults=1,
-                type="video"
-            )
-
-            # ✅ Get latest video ID to prevent false trigger
+        
+            # Get latest video ID to prevent false trigger
             search_req = youtube_service.search().list(
                 part="id",
                 channelId=channel_id,
@@ -1648,9 +1619,9 @@ async def add_social_tracker(interaction: discord.Interaction,
                 type="video"
             )
             search_res = search_req.execute()
-            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else "null"
-            
-            # ✅ Get latest live video ID
+            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
+        
+            # Get latest live video ID
             search_live = youtube_service.search().list(
                 part="id",
                 channelId=channel_id,
@@ -1658,9 +1629,9 @@ async def add_social_tracker(interaction: discord.Interaction,
                 type="video",
                 maxResults=1
             ).execute()
-            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else "null"
-
-            # Get initial stats with valid channel_id
+            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
+        
+            # Get channel statistics
             request = youtube_service.channels().list(
                 part='statistics,snippet',
                 id=channel_id
@@ -1680,7 +1651,7 @@ async def add_social_tracker(interaction: discord.Interaction,
             stats = response['items'][0]['statistics']
             account_info = {
                 'platform': platform,
-                'url': f"https://www.youtube.com/channel/{channel_id}",
+                'url': account_url,  # Use original URL
                 'channel_id': channel_id,
                 'account_name': response['items'][0]['snippet']['title'],
                 'last_count': int(stats['subscriberCount']),
