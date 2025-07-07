@@ -335,34 +335,12 @@ async def event_schedule_notifier():
         
         await asyncio.sleep(60)  # check every 60 seconds
 
-async def check_social_updates():
-    for guild_id, trackers in list(social_trackers.items()):
-        for tracker in trackers[:]:  # Use copy for safe iteration
-            try:
-                if tracker['platform'] == 'youtube':
-                    await check_youtube_update(guild_id, tracker)
-                elif tracker['platform'] == 'instagram':
-                    await check_instagram_update(guild_id, tracker)
-            except Exception as e:
-                print(f"⚠️ Error checking {tracker['platform']} tracker: {e}")
-                
-try:
-    # Existing YouTube checking code
-except HttpError as e:
-    if e.resp.status == 403:
-        print(f"⚠️ YouTube API quota exceeded for {tracker['account_name']}")
-    else:
-        print(f"⚠️ YouTube API error: {e}")
-    return
-except Exception as e:
-    print(f"⚠️ YouTube check failed: {e}")
-    return
-    
 async def check_youtube_update(guild_id, tracker):
     if not youtube_service:
         return
 
     try:
+        # Get current channel stats
         request = youtube_service.channels().list(
             part='statistics,snippet',
             id=tracker['channel_id']
@@ -376,22 +354,21 @@ async def check_youtube_update(guild_id, tracker):
         snippet = response['items'][0]['snippet']
         channel_name = snippet['title']
         sub_count_raw = stats.get('subscriberCount')
-        sub_count_raw = stats.get('subscriberCount')
-            if not sub_count_raw or not sub_count_raw.isdigit():
-                print(f"⚠️ Skipping {tracker['account_name']} - invalid sub count")
-                return
-            current_subs = int(sub_count_raw)
-
         
+        # FIX 1: Better subscriber count validation
+        if not sub_count_raw or not sub_count_raw.isdigit():
+            print(f"⚠️ Skipping update for {tracker['account_name']} - invalid or missing sub count")
+            return  # Don't update anything
+        current_subs = int(sub_count_raw)
+
         last_subs = tracker.get('last_count', 0)
 
-        # ✅ Auto-fix corrupted or missing count
+        # Auto-fix corrupted or missing count
         if not isinstance(last_subs, int) or last_subs == 0:
             tracker['last_count'] = current_subs
             save_social_trackers()
 
-
-        # ✅ If subscriber growth, send milestone alert
+        # If subscriber growth, send milestone alert
         elif current_subs > last_subs:
             tracker['last_count'] = current_subs
             save_social_trackers()
@@ -411,7 +388,8 @@ async def check_youtube_update(guild_id, tracker):
                 embed.set_footer(text="Nexus Esports Social Tracker")
                 await channel.send(embed=embed)
 
-        # ✅ Detect new video uploads
+        # FIX 2: Add null check for video detection
+        # Detect new video uploads
         upload_req = youtube_service.search().list(
             part="snippet",
             channelId=tracker['channel_id'],
@@ -423,14 +401,11 @@ async def check_youtube_update(guild_id, tracker):
         if upload_res.get('items'):
             latest_video = upload_res['items'][0]
             video_id = latest_video['id']['videoId']
-            if tracker.get("last_video_id") != video_id and video_id is not None:
-                # Send notification
-                tracker["last_video_id"] = video_id
-                save_social_trackers()
             video_title = latest_video['snippet']['title']
             publish_time = latest_video['snippet']['publishedAt']
 
-            if tracker.get("last_video_id") != video_id:
+            # Only notify if video_id exists and is different
+            if video_id and tracker.get("last_video_id") != video_id:
                 tracker["last_video_id"] = video_id
                 save_social_trackers()
 
@@ -447,7 +422,8 @@ async def check_youtube_update(guild_id, tracker):
                     embed.set_footer(text="Nexus Esports YouTube Feed")
                     await channel.send(embed=embed)
 
-        # ✅ Detect if channel is live
+        # FIX 3: Add null check for live detection
+        # Detect if channel is live
         live_req = youtube_service.search().list(
             part="snippet",
             channelId=tracker['channel_id'],
@@ -458,15 +434,12 @@ async def check_youtube_update(guild_id, tracker):
         live_res = live_req.execute()
         if live_res.get('items'):
             live_video = live_res['items'][0]
-            live_video_id = live_res['items'][0]['id']['videoId']
-            if tracker.get("last_live_video_id") != live_video_id and live_video_id is not None:
-                # Send notification
-                tracker["last_live_video_id"] = live_video_id
-                save_social_trackers()
+            live_video_id = live_video['id']['videoId']
             live_title = live_video['snippet']['title']
             live_thumb = live_video['snippet']['thumbnails']['high']['url']
 
-            if tracker.get("last_live_video_id") != live_video_id:
+            # Only notify if live_video_id exists and is different
+            if live_video_id and tracker.get("last_live_video_id") != live_video_id:
                 tracker["last_live_video_id"] = live_video_id
                 save_social_trackers()
 
@@ -482,10 +455,15 @@ async def check_youtube_update(guild_id, tracker):
                     embed.set_thumbnail(url=live_thumb)
                     embed.set_footer(text="Nexus Esports YouTube Feed")
                     await channel.send(embed=embed)
-
+                    
+    # FIX 4: Add proper error handling
+    except HttpError as e:
+        if e.resp.status == 403:
+            print(f"⚠️ YouTube API quota exceeded for {tracker['account_name']}")
+        else:
+            print(f"⚠️ YouTube API error: {e}")
     except Exception as e:
         print(f"Error in check_youtube_update: {e}")
-
 
 async def check_instagram_update(guild_id, tracker):
     # Instagram requires web scraping - use carefully
