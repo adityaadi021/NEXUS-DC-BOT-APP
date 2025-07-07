@@ -1537,14 +1537,7 @@ async def add_social_tracker(interaction: discord.Interaction,
             
             channel_id = None
 
-            # Fetch latest video ID to prevent false trigger
-            search_req = youtube_service.search().list(
-                part="id",
-                channelId=channel_id,
-                order="date",
-                maxResults=1,
-                type="video"
-            )
+            
             search_res = search_req.execute()
             latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
             
@@ -1596,6 +1589,15 @@ async def add_social_tracker(interaction: discord.Interaction,
                     ),
                     ephemeral=True
                 )
+                
+            # Fetch latest video ID to prevent false trigger
+            search_req = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                order="date",
+                maxResults=1,
+                type="video"
+            )
             
             # Get initial stats with valid channel_id
             request = youtube_service.channels().list(
