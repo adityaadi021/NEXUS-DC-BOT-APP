@@ -1537,25 +1537,6 @@ async def add_social_tracker(interaction: discord.Interaction,
             
             channel_id = None
 
-            
-            search_res = search_req.execute()
-            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
-            
-            account_info['last_video_id'] = latest_video_id
-            
-            # Fetch latest live video ID to prevent false live trigger
-            search_live = youtube_service.search().list(
-                part="id",
-                channelId=channel_id,
-                eventType="live",
-                type="video",
-                maxResults=1
-            ).execute()
-            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
-            
-            account_info['last_live_video_id'] = latest_live_id
-
-            
             # Extract channel ID from URL
             if "youtube.com/channel/" in account_url:
                 channel_id = account_url.split("youtube.com/channel/")[1].split("/")[0].split("?")[0]
@@ -1589,7 +1570,27 @@ async def add_social_tracker(interaction: discord.Interaction,
                     ),
                     ephemeral=True
                 )
-                
+
+            
+            search_res = search_req.execute()
+            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
+            
+            account_info['last_video_id'] = latest_video_id
+            
+            # Fetch latest live video ID to prevent false live trigger
+            search_live = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                eventType="live",
+                type="video",
+                maxResults=1
+            ).execute()
+            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
+            
+            account_info['last_live_video_id'] = latest_live_id
+
+            
+            
             # Fetch latest video ID to prevent false trigger
             search_req = youtube_service.search().list(
                 part="id",
