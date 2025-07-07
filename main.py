@@ -351,7 +351,6 @@ async def check_youtube_update(guild_id, tracker):
         return
 
     try:
-        # --- Subscriber Growth ---
         request = youtube_service.channels().list(
             part='statistics,snippet',
             id=tracker['channel_id']
@@ -367,20 +366,64 @@ async def check_youtube_update(guild_id, tracker):
         current_subs = int(stats['subscriberCount'])
         last_subs = tracker.get('last_count', 0)
 
-        # Round down to nearest 50
-        def round_down_to_nearest_50(n):
-            return n - (n % 50)
-        
-        rounded_now = round_down_to_nearest_50(current_subs)
-        rounded_before = round_down_to_nearest_50(last_subs)
-        
-        if rounded_now > rounded_before:
+        # ✅ Always update subscriber count if 0
+        if last_subs == 0:
             tracker['last_count'] = current_subs
             save_social_trackers()
-        
-           
 
-        # --- Live Stream Detection ---
+        # ✅ If subscriber growth, send milestone alert
+        elif current_subs > last_subs:
+            tracker['last_count'] = current_subs
+            save_social_trackers()
+
+            channel = bot.get_channel(int(tracker['post_channel']))
+            if channel:
+                embed = discord.Embed(
+                    title="🎉 YouTube Milestone Reached!",
+                    description=(
+                        f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
+                        f"`+{current_subs - last_subs:,}` since last update"
+                    ),
+                    color=discord.Color.red(),
+                    url=tracker['url']
+                )
+                embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
+                embed.set_footer(text="Nexus Esports Social Tracker")
+                await channel.send(embed=embed)
+
+        # ✅ Detect new video uploads
+        upload_req = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            order="date",
+            maxResults=1,
+            type="video"
+        )
+        upload_res = upload_req.execute()
+        if upload_res.get('items'):
+            latest_video = upload_res['items'][0]
+            video_id = latest_video['id']['videoId']
+            video_title = latest_video['snippet']['title']
+            publish_time = latest_video['snippet']['publishedAt']
+
+            if tracker.get("last_video_id") != video_id:
+                tracker["last_video_id"] = video_id
+                save_social_trackers()
+
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    video_url = f"https://youtu.be/{video_id}"
+                    embed = discord.Embed(
+                        title=f"🎬 New Video from {channel_name}",
+                        description=f"**{video_title}**\n🔗 [Watch Now]({video_url})",
+                        color=discord.Color.red(),
+                        timestamp=datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
+                    )
+                    embed.set_thumbnail(url=latest_video['snippet']['thumbnails']['high']['url'])
+                    embed.set_footer(text="Nexus Esports YouTube Feed")
+                    await channel.send(embed=embed)
+
+        # ✅ Detect if channel is live
         live_req = youtube_service.search().list(
             part="snippet",
             channelId=tracker['channel_id'],
@@ -389,10 +432,8 @@ async def check_youtube_update(guild_id, tracker):
             maxResults=1
         )
         live_res = live_req.execute()
-        live_items = live_res.get('items', [])
-
-        if live_items:
-            live_video = live_items[0]
+        if live_res.get('items'):
+            live_video = live_res['items'][0]
             live_video_id = live_video['id']['videoId']
             live_title = live_video['snippet']['title']
             live_thumb = live_video['snippet']['thumbnails']['high']['url']
@@ -410,21 +451,12 @@ async def check_youtube_update(guild_id, tracker):
                         color=discord.Color.red(),
                         timestamp=datetime.utcnow()
                     )
-                    embed = discord.Embed(
-                    title=f"🔴 {channel_name} is LIVE!",
-                    description=f"```{live_title}```\n[🔴 Watch Now](https://www.youtube.com/watch?v={live_video_id})",
-                    color=discord.Color.red(),
-                    timestamp=datetime.utcnow()
-                    )
-                    embed.set_image(url=live_thumb)
-
+                    embed.set_thumbnail(url=live_thumb)
+                    embed.set_footer(text="Nexus Esports YouTube Feed")
                     await channel.send(embed=embed)
 
-    except HttpError as e:
-        print(f"YouTube API error: {e}")
     except Exception as e:
-        print(f"General YouTube error: {e}")
-
+        print(f"Error in check_youtube_update: {e}")
 
 
 async def check_instagram_update(guild_id, tracker):
