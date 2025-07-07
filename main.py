@@ -366,10 +366,11 @@ async def check_youtube_update(guild_id, tracker):
         current_subs = int(stats['subscriberCount'])
         last_subs = tracker.get('last_count', 0)
 
-        # ✅ Always update subscriber count if 0
-        if last_subs == 0:
+        # ✅ Auto-fix corrupted or missing count
+        if not isinstance(last_subs, int) or last_subs == 0:
             tracker['last_count'] = current_subs
             save_social_trackers()
+
 
         # ✅ If subscriber growth, send milestone alert
         elif current_subs > last_subs:
