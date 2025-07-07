@@ -378,50 +378,7 @@ async def check_youtube_update(guild_id, tracker):
             tracker['last_count'] = current_subs
             save_social_trackers()
         
-            channel = bot.get_channel(int(tracker['post_channel']))
-            if channel:
-                embed = discord.Embed(
-                    title=f"🎉 {channel_name} Hit {rounded_now:,} Subscribers!",
-                    description=f"```Reached {rounded_now:,} YouTube subscribers!```",
-                    color=discord.Color.gold()
-                )
-                embed.set_image(url="https://i.imgur.com/krKzGz0.png")  # Large banner image
-                await channel.send(embed=embed)
-
-
-        # --- New Upload Detection ---
-        upload_req = youtube_service.search().list(
-            part="snippet",
-            channelId=tracker['channel_id'],
-            order="date",
-            maxResults=1,
-            type="video"
-        )
-        upload_res = upload_req.execute()
-        items = upload_res.get('items', [])
-
-        if items:
-            latest_video = items[0]
-            video_id = latest_video['id']['videoId']
-            video_title = latest_video['snippet']['title']
-            publish_time = latest_video['snippet']['publishedAt']
-
-            if tracker.get("last_video_id") != video_id:
-                tracker["last_video_id"] = video_id
-                save_social_trackers()
-
-                channel = bot.get_channel(int(tracker['post_channel']))
-                if channel:
-                    video_url = f"https://youtu.be/{video_id}"
-                    embed = discord.Embed(
-                        title=f"🎬 New Video from {channel_name}",
-                        description=f"**{video_title}**\n🔗 [Watch Now]({video_url})",
-                        color=discord.Color.red(),
-                        timestamp=datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
-                    )
-                    embed.set_thumbnail(url=latest_video['snippet']['thumbnails']['high']['url'])
-                    embed.set_footer(text="Nexus Esports YouTube Feed")
-                    await channel.send(embed=embed)
+           
 
         # --- Live Stream Detection ---
         live_req = youtube_service.search().list(
