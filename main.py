@@ -349,40 +349,35 @@ async def check_social_updates():
 async def check_youtube_update(guild_id, tracker):
     if not youtube_service:
         return
-        
+
     try:
+        # --- Subscriber Growth ---
         request = youtube_service.channels().list(
             part='statistics,snippet',
             id=tracker['channel_id']
         )
         response = request.execute()
-        
+
         if not response.get('items'):
             return
-        
+
         stats = response['items'][0]['statistics']
+        snippet = response['items'][0]['snippet']
+        channel_name = snippet['title']
         current_subs = int(stats['subscriberCount'])
         last_subs = tracker.get('last_count', 0)
-        
+
         if current_subs > last_subs:
-            # Get channel name
-            channel_name = response['items'][0]['snippet']['title']
-            
-            # Calculate growth
-            growth = current_subs - last_subs
-            
-            # Update tracker
             tracker['last_count'] = current_subs
             save_social_trackers()
-            
-            # Send notification
+
             channel = bot.get_channel(int(tracker['post_channel']))
             if channel:
                 embed = discord.Embed(
                     title="🎉 YouTube Milestone Reached!",
                     description=(
                         f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
-                        f"`+{growth:,}` since last update"
+                        f"`+{current_subs - last_subs:,}` since last update"
                     ),
                     color=discord.Color.red(),
                     url=tracker['url']
@@ -390,10 +385,81 @@ async def check_youtube_update(guild_id, tracker):
                 embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
                 embed.set_footer(text="Nexus Esports Social Tracker")
                 await channel.send(embed=embed)
+
+        # --- New Upload Detection ---
+        upload_req = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            order="date",
+            maxResults=1,
+            type="video"
+        )
+        upload_res = upload_req.execute()
+        items = upload_res.get('items', [])
+
+        if items:
+            latest_video = items[0]
+            video_id = latest_video['id']['videoId']
+            video_title = latest_video['snippet']['title']
+            publish_time = latest_video['snippet']['publishedAt']
+
+            if tracker.get("last_video_id") != video_id:
+                tracker["last_video_id"] = video_id
+                save_social_trackers()
+
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    video_url = f"https://youtu.be/{video_id}"
+                    embed = discord.Embed(
+                        title=f"🎬 New Video from {channel_name}",
+                        description=f"**{video_title}**\n🔗 [Watch Now]({video_url})",
+                        color=discord.Color.red(),
+                        timestamp=datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
+                    )
+                    embed.set_thumbnail(url=latest_video['snippet']['thumbnails']['high']['url'])
+                    embed.set_footer(text="Nexus Esports YouTube Feed")
+                    await channel.send(embed=embed)
+
+        # --- Live Stream Detection ---
+        live_req = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            eventType="live",
+            type="video",
+            maxResults=1
+        )
+        live_res = live_req.execute()
+        live_items = live_res.get('items', [])
+
+        if live_items:
+            live_video = live_items[0]
+            live_video_id = live_video['id']['videoId']
+            live_title = live_video['snippet']['title']
+            live_thumb = live_video['snippet']['thumbnails']['high']['url']
+
+            if tracker.get("last_live_video_id") != live_video_id:
+                tracker["last_live_video_id"] = live_video_id
+                save_social_trackers()
+
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    live_url = f"https://www.youtube.com/watch?v={live_video_id}"
+                    embed = discord.Embed(
+                        title=f"🔴 {channel_name} is LIVE!",
+                        description=f"**{live_title}**\n\n🎥 [Join Now]({live_url})",
+                        color=discord.Color.red(),
+                        timestamp=datetime.utcnow()
+                    )
+                    embed.set_thumbnail(url=live_thumb)
+                    embed.set_footer(text="Nexus Esports YouTube Feed")
+                    await channel.send(embed=embed)
+
     except HttpError as e:
         print(f"YouTube API error: {e}")
     except Exception as e:
         print(f"General YouTube error: {e}")
+
+
 
 async def check_instagram_update(guild_id, tracker):
     # Instagram requires web scraping - use carefully
@@ -1504,6 +1570,32 @@ async def add_social_tracker(interaction: discord.Interaction,
                 )
             
             channel_id = None
+
+            # Fetch latest video ID to prevent false trigger
+            search_req = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                order="date",
+                maxResults=1,
+                type="video"
+            )
+            search_res = search_req.execute()
+            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
+            
+            account_info['last_video_id'] = latest_video_id
+            
+            # Fetch latest live video ID to prevent false live trigger
+            search_live = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                eventType="live",
+                type="video",
+                maxResults=1
+            ).execute()
+            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
+            
+            account_info['last_live_video_id'] = latest_live_id
+
             
             # Extract channel ID from URL
             if "youtube.com/channel/" in account_url:
