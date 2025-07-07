@@ -4,7 +4,7 @@ from discord.ext import commands
 from discord.ui import Modal, TextInput, View, Select
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import asyncio
 import requests
@@ -137,7 +137,7 @@ async def list_tournament_events(interaction: discord.Interaction):
     )
 
     for i, event in enumerate(events, 1):
-        event_time = datetime.fromisoformat(event["time"])
+        event_time = datetime.fromisoformat(event["time"]) + timedelta(hours=5, minutes=30)
         ping_role = f"<@&{event['ping_role_id']}>" if event.get("ping_role_id") else "None"
         embed.add_field(
             name=f"{i}. {event['title']}",
@@ -654,7 +654,7 @@ class TournamentEventModal(Modal, title="📅 Schedule Tournament Event"):
         self.view = view
         self.title_input = TextInput(label="Event Title", placeholder="e.g., Grand Finals")
         self.description_input = TextInput(label="Description", style=discord.TextStyle.paragraph, required=True)
-        self.datetime_input = TextInput(label="Start Time (YYYY-MM-DD HH:MM UTC)", placeholder="e.g., 2025-07-10 18:30")
+        self.datetime_input = TextInput(label="Start Time (YYYY-MM-DD HH:MM IST)",placeholder="e.g., 2025-07-10 18:30",required=True)
         self.role_input = TextInput(label="Ping Role ID or @mention (optional)", required=False)
         self.image_input = TextInput(label="Image URL (optional)", required=False)
 
@@ -668,7 +668,8 @@ class TournamentEventModal(Modal, title="📅 Schedule Tournament Event"):
         from dateutil.parser import parse as parse_datetime
 
         try:
-            event_time = parse_datetime(self.datetime_input.value)
+            event_time_ist = parse_datetime(self.datetime_input.value)
+            event_time = event_time_ist - timedelta(hours=5, minutes=30)
             if event_time < datetime.utcnow():
                 raise ValueError("Event time must be in the future.")
 
