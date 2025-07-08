@@ -19,6 +19,7 @@ print("🚀 Bot is starting...")
 
 app = Flask(__name__)
 
+# Flask route handlers
 @app.route('/')
 def home():
     return 'Bot is running!'
@@ -57,7 +58,12 @@ commands_synced = False
 # Configuration storage
 CONFIG_FILE = "bot_config.json"
 guild_configs = {}
+EVENT_FILE = "event_schedule.json"
+event_schedule = {}
+SOCIAL_FILE = "social_trackers.json"
+social_trackers = {}
 
+# Load configs on startup
 def load_config():
     global guild_configs
     try:
@@ -74,10 +80,6 @@ def save_config():
             json.dump(guild_configs, f, indent=2)
     except Exception as e:
         print(f"⚠️ Error saving config: {e}")
-
-# Tournament Event Schedule
-EVENT_FILE = "event_schedule.json"
-event_schedule = {}
 
 def load_event_schedule():
     global event_schedule
@@ -96,7 +98,22 @@ def save_event_schedule():
     except Exception as e:
         print(f"⚠️ Error saving event schedule: {e}")
 
-from dateutil.parser import parse as parse_datetime  # Add at the top if not already imported
+def load_social_trackers():
+    global social_trackers
+    try:
+        if os.path.exists(SOCIAL_FILE):
+            with open(SOCIAL_FILE, 'r') as f:
+                social_trackers = json.load(f)
+    except Exception as e:
+        print(f"⚠️ Error loading social trackers: {e}")
+        social_trackers = {}
+
+def save_social_trackers():
+    try:
+        with open(SOCIAL_FILE, 'w') as f:
+            json.dump(social_trackers, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Error saving social trackers: {e}")
 
 @bot.tree.command(name="add-tournament-event", description="Open a form to schedule a tournament event")
 async def add_tournament_event(interaction: discord.Interaction):
@@ -216,32 +233,7 @@ async def force_sync(interaction: discord.Interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ Sync failed: {e}", ephemeral=True)
 
-# Social tracker storage
-SOCIAL_FILE = "social_trackers.json"
-social_trackers = {}
-
-def load_social_trackers():
-    global social_trackers
-    try:
-        if os.path.exists(SOCIAL_FILE):
-            with open(SOCIAL_FILE, 'r') as f:
-                social_trackers = json.load(f)
-    except Exception as e:
-        print(f"⚠️ Error loading social trackers: {e}")
-        social_trackers = {}
-
-def save_social_trackers():
-    try:
-        with open(SOCIAL_FILE, 'w') as f:
-            json.dump(social_trackers, f, indent=2)
-    except Exception as e:
-        print(f"⚠️ Error saving social trackers: {e}")
-
-# Load configs on startup
-load_config()
-load_social_trackers()
-load_event_schedule()
-
+# Tournament Event Schedule
 @bot.event
 async def on_ready():
     global commands_synced
@@ -289,9 +281,6 @@ async def check_social_updates():
             try:
                 if tracker['platform'] == 'youtube':
                     await check_youtube_update(guild_id, tracker)
-                elif tracker['platform'] == 'instagram':
-                    await check_instagram_update(guild_id, tracker)
-                # Add 1s delay between trackers
                 await asyncio.sleep(1)
             except Exception as e:
                 print(f"⚠️ Error in social update: {e}")
@@ -366,23 +355,18 @@ async def check_youtube_update(guild_id, tracker):
             return
 
         stats = response['items'][0]['statistics']
-        sub_count_raw = stats.get('subscriberCount')
-        
-        # Handle hidden subscriber counts
-        if not sub_count_raw or not sub_count_raw.isdigit():
-            print(f"⚠️ Hidden subscriber count for {tracker['account_name']}")
-            current_subs = tracker.get('last_count', 0)  # Keep previous value
-        else:
-            current_subs = int(sub_count_raw)
         snippet = response['items'][0]['snippet']
         channel_name = snippet['title']
-
         
-        # FIX 1: Better subscriber count validation
+        # Get subscriber count
+        sub_count_raw = stats.get('subscriberCount')
+        
+        # Handle hidden subscriber counts - don't exit, just use previous value
         if not sub_count_raw or not sub_count_raw.isdigit():
-            print(f"⚠️ Skipping update for {tracker['account_name']} - invalid or missing sub count")
-            return  # Don't update anything
-        current_subs = int(sub_count_raw)
+            print(f"⚠️ Hidden subscriber count for {tracker['account_name']}")
+            current_subs = tracker.get('last_count', 0)
+        else:
+            current_subs = int(sub_count_raw)
 
         last_subs = tracker.get('last_count', 0)
 
@@ -487,59 +471,6 @@ async def check_youtube_update(guild_id, tracker):
             print(f"⚠️ YouTube API error: {e}")
     except Exception as e:
         print(f"Error in check_youtube_update: {e}")
-
-async def check_instagram_update(guild_id, tracker):
-    # Instagram requires web scraping - use carefully
-    try:
-        response = requests.get(tracker['url'], headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Find follower count in meta tags
-        meta_tag = soup.find('meta', property='og:description')
-        if meta_tag:
-            content = meta_tag.get('content', '')
-            # Extract follower count from string like "1M Followers, 500 Following..."
-            if 'Followers' in content:
-                followers_str = content.split(' Followers')[0].split(' ')[-1]
-                # Convert to number
-                if followers_str.endswith('K'):
-                    current_followers = int(float(followers_str.replace('K', '')) * 1000)
-                elif followers_str.endswith('M'):
-                    current_followers = int(float(followers_str.replace('M', '')) * 1000000)
-                else:
-                    current_followers = int(followers_str.replace(',', ''))
-            else:
-                return
-        else:
-            return
-        
-        last_followers = tracker.get('last_count', 0)
-        
-        if current_followers > last_followers:
-            # Update tracker
-            tracker['last_count'] = current_followers
-            save_social_trackers()
-            
-            # Send notification
-            channel = bot.get_channel(int(tracker['post_channel']))
-            if channel:
-                growth = current_followers - last_followers
-                embed = discord.Embed(
-                    title="📸 Instagram Growth!",
-                    description=(
-                        f"**{tracker['account_name']}** now has **{current_followers:,} followers**!\n"
-                        f"`+{growth:,}` since last update"
-                    ),
-                    color=discord.Color.purple(),
-                    url=tracker['url']
-                )
-                embed.set_thumbnail(url="https://i.imgur.com/vn8M9aO.png")
-                embed.set_footer(text="Nexus Esports Social Tracker")
-                await channel.send(embed=embed)
-    except Exception as e:
-        print(f"Instagram scraping failed: {e}")
 
 # Auto-reply to DMs
 @bot.event
@@ -1559,8 +1490,7 @@ async def reply_in_channel(interaction: discord.Interaction,
     post_channel="Channel to post updates"
 )
 @app_commands.choices(platform=[
-    app_commands.Choice(name="YouTube", value="youtube"),
-    app_commands.Choice(name="Instagram", value="instagram")
+    app_commands.Choice(name="YouTube", value="youtube")
 ])
 async def add_social_tracker(interaction: discord.Interaction, 
                             platform: str, 
@@ -1683,70 +1613,6 @@ async def add_social_tracker(interaction: discord.Interaction,
             }
 
         
-        elif platform == "instagram":
-            # Extract username from URL
-            if "instagram.com/" not in account_url:
-                return await interaction.response.send_message(
-                    embed=create_embed(
-                        title="❌ Invalid URL",
-                        description="Please provide a valid Instagram profile URL",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-            
-            username = account_url.split("instagram.com/")[1].split("/")[0].split("?")[0]
-            clean_url = f"https://www.instagram.com/{username}/"
-            
-            # Get initial follower count (approximate)
-            response = requests.get(clean_url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            meta_tag = soup.find('meta', property='og:description')
-            
-            if not meta_tag:
-                return await interaction.response.send_message(
-                    embed=create_embed(
-                        title="❌ Account Not Found",
-                        description="Couldn't fetch Instagram data",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-            
-            content = meta_tag.get('content', '')
-            if 'Followers' not in content:
-                return await interaction.response.send_message(
-                    embed=create_embed(
-                        title="❌ Data Extraction Failed",
-                        description="Couldn't find follower count in page",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-            
-            followers_str = content.split(' Followers')[0].split(' ')[-1]
-            
-            account_info = {
-                'platform': platform,
-                'url': clean_url,
-                'account_name': username,
-                'post_channel': str(post_channel.id)
-            }
-            
-            # Try to parse follower count
-            try:
-                if 'K' in followers_str:
-                    account_info['last_count'] = int(float(followers_str.replace('K', ''))) * 1000
-                elif 'M' in followers_str:
-                    account_info['last_count'] = int(float(followers_str.replace('M', ''))) * 1000000
-                else:
-                    account_info['last_count'] = int(followers_str.replace(',', ''))
-            except Exception as e:
-                print(f"Instagram follower parse error: {e}")
-                account_info['last_count'] = 0
-    
     except HttpError as e:
         return await interaction.response.send_message(
             embed=create_embed(
