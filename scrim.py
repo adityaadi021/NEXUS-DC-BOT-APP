@@ -158,3 +158,15 @@ def setup_scrim_commands(bot):
         view = ScrimRegisterView(event_id)
         await channel.send(embed=embed, view=view)
         await interaction.response.send_message(f"✅ Scrim registration started in {channel.mention}", ephemeral=True)
+
+import discord
+from discord import app_commands
+
+# Example scrim command (replace or expand as needed)
+@app_commands.command(name="register-scrim", description="Register for a scrim event")
+async def register_scrim(interaction: discord.Interaction):
+    await interaction.response.send_message("You have registered for the scrim!", ephemeral=True)
+
+async def setup(bot):
+    # Register scrim commands with the bot
+    bot.tree.add_command(register_scrim)
