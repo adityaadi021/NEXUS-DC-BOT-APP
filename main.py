@@ -12,7 +12,8 @@ from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from flask import Flask
-import scrim
+from threading import Thread
+import scrim  # Ensure scrim is imported
 
 
 print("🚀 Bot is starting...")
@@ -1778,18 +1779,18 @@ async def on_guild_remove(guild):
         save_social_trackers()
 
 async def main():
-    # Load scrim commands
+    # Start Flask server in a separate thread
+    Thread(target=run_flask, daemon=True).start()
+    # Import and setup scrim commands (only once)
+    import scrim
     await scrim.setup(bot)
+    # Start the bot
+    await bot.start(token)
 
 if __name__ == "__main__":
     import asyncio
-    from threading import Thread
-    Thread(target=run_flask).start()
-    async def startup():
-        await scrim.setup(bot)
-        await bot.start(token)
     try:
-        asyncio.run(startup())
+        asyncio.run(main())
     except discord.PrivilegedIntentsRequired:
         print("\n❌ PRIVILEGED INTENTS REQUIRED ❌")
         print("1. Go to https://discord.com/developers/applications")
