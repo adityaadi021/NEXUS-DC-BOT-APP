@@ -281,6 +281,21 @@ async def on_ready():
         print("✅ Started tournament event schedule task")
 
 # Background task for social updates
+
+async def check_social_updates():
+    """Check all social trackers for updates"""
+    for guild_id, trackers in social_trackers.items():
+        for tracker in trackers:
+            try:
+                if tracker['platform'] == 'youtube':
+                    await check_youtube_update(guild_id, tracker)
+                elif tracker['platform'] == 'instagram':
+                    await check_instagram_update(guild_id, tracker)
+                # Add 1s delay between trackers
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"⚠️ Error in social update: {e}")
+                
 async def social_update_task():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -351,9 +366,17 @@ async def check_youtube_update(guild_id, tracker):
             return
 
         stats = response['items'][0]['statistics']
+        sub_count_raw = stats.get('subscriberCount')
+        
+        # Handle hidden subscriber counts
+        if not sub_count_raw or not sub_count_raw.isdigit():
+            print(f"⚠️ Hidden subscriber count for {tracker['account_name']}")
+            current_subs = tracker.get('last_count', 0)  # Keep previous value
+        else:
+            current_subs = int(sub_count_raw)
         snippet = response['items'][0]['snippet']
         channel_name = snippet['title']
-        sub_count_raw = stats.get('subscriberCount')
+
         
         # FIX 1: Better subscriber count validation
         if not sub_count_raw or not sub_count_raw.isdigit():
