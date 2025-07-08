@@ -1786,3 +1786,7 @@ except discord.LoginFailure:
     print("❌ Invalid token. Check your DISCORD_TOKEN")
 except Exception as e:
     print(f"❌ Unexpected error: {e}")
+
+# to load scrim commands
+from scrim import setup_scrim_commands
+setup_scrim_commands(bot)
