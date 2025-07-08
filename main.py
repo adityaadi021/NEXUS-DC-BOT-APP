@@ -419,21 +419,24 @@ async def check_youtube_update(guild_id, tracker):
 
             # Only notify if video_id exists and is different
             if video_id and tracker.get("last_video_id") != video_id:
-                tracker["last_video_id"] = video_id
-                save_social_trackers()
-
+                embed = discord.Embed(
+                    title=f"📺 New YouTube Video: {video_title}",
+                    url=f"https://youtu.be/{video_id}",
+                    description=f"A new video was uploaded on {tracker['account_name']}!",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                embed.add_field(name="Published", value=f"<t:{int(datetime.fromisoformat(publish_time.replace('Z','')).timestamp())}:R>", inline=True)
+                # Move thumbnail to bottom and make it bigger
+                embed.set_image(url=latest_video['snippet']['thumbnails']['high']['url'])
+                # Remove set_thumbnail if present
+                # Send notification
                 channel = bot.get_channel(int(tracker['post_channel']))
                 if channel:
-                    video_url = f"https://youtu.be/{video_id}"
-                    embed = discord.Embed(
-                        title=f"🎬 New Video from {channel_name}",
-                        description=f"**{video_title}**\n🔗 [Watch Now]({video_url})",
-                        color=discord.Color.red(),
-                        timestamp=datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
-                    )
-                    embed.set_thumbnail(url=latest_video['snippet']['thumbnails']['high']['url'])
-                    embed.set_footer(text="Nexus Esports YouTube Feed")
                     await channel.send(embed=embed)
+                tracker['last_video_id'] = video_id
+                save_social_trackers()
 
         # FIX 3: Add null check for live detection
         # Detect if channel is live
@@ -453,22 +456,23 @@ async def check_youtube_update(guild_id, tracker):
 
             # Only notify if live_video_id exists and is different
             if live_video_id and tracker.get("last_live_video_id") != live_video_id:
-                tracker["last_live_video_id"] = live_video_id
-                save_social_trackers()
-
+                embed = discord.Embed(
+                    title=f"🔴 {tracker['account_name']} is LIVE!",
+                    url=f"https://youtu.be/{live_video_id}",
+                    description=f"{live_title}",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                # Move thumbnail to bottom and make it bigger
+                embed.set_image(url=live_thumb)
+                # Remove set_thumbnail if present
                 channel = bot.get_channel(int(tracker['post_channel']))
                 if channel:
-                    live_url = f"https://www.youtube.com/watch?v={live_video_id}"
-                    embed = discord.Embed(
-                        title=f"🔴 {channel_name} is LIVE!",
-                        description=f"**{live_title}**\n\n🎥 [Join Now]({live_url})",
-                        color=discord.Color.red(),
-                        timestamp=datetime.utcnow()
-                    )
-                    embed.set_thumbnail(url=live_thumb)
-                    embed.set_footer(text="Nexus Esports YouTube Feed")
                     await channel.send(embed=embed)
-                    
+                tracker['last_live_video_id'] = live_video_id
+                save_social_trackers()
+
     # FIX 4: Add proper error handling
     except HttpError as e:
         if e.resp.status == 403:
