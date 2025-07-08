@@ -12,8 +12,7 @@ from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from flask import Flask
-from threading import Thread
-import scrim  # Import the scrim module
+import scrim
 
 
 print("🚀 Bot is starting...")
@@ -1782,21 +1781,23 @@ async def main():
     # Load scrim commands
     await scrim.setup(bot)
 
-try:
+if __name__ == "__main__":
+    import asyncio
+    from threading import Thread
     Thread(target=run_flask).start()
-    bot.run(token)
-except discord.PrivilegedIntentsRequired:
-    print("\n❌ PRIVILEGED INTENTS REQUIRED ❌")
-    print("1. Go to https://discord.com/developers/applications")
-    print("2. Select your application")
-    print("3. Navigate to Bot > Privileged Gateway Intents")
-    print("4. ENABLE 'MESSAGE CONTENT INTENT' and 'SERVER MEMBERS INTENT'")
-    print("5. Save changes and restart your bot\n")
-except discord.LoginFailure:
-    print("❌ Invalid token. Check your DISCORD_TOKEN")
-except Exception as e:
-    print(f"❌ Unexpected error: {e}")
-
-# Add this at the end of your main file to load scrim commands
-from scrim import setup_scrim_commands
-setup_scrim_commands(bot)
+    async def startup():
+        await scrim.setup(bot)
+        await bot.start(token)
+    try:
+        asyncio.run(startup())
+    except discord.PrivilegedIntentsRequired:
+        print("\n❌ PRIVILEGED INTENTS REQUIRED ❌")
+        print("1. Go to https://discord.com/developers/applications")
+        print("2. Select your application")
+        print("3. Navigate to Bot > Privileged Gateway Intents")
+        print("4. ENABLE 'MESSAGE CONTENT INTENT' and 'SERVER MEMBERS INTENT'")
+        print("5. Save changes and restart your bot\n")
+    except discord.LoginFailure:
+        print("❌ Invalid token. Check your DISCORD_TOKEN")
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
