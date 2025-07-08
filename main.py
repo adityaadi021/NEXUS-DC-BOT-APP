@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from flask import Flask
 from threading import Thread
+import scrim  # Import the scrim module
 
 
 print("🚀 Bot is starting...")
@@ -1776,6 +1777,10 @@ async def on_guild_remove(guild):
     if guild_id in social_trackers:
         del social_trackers[guild_id]
         save_social_trackers()
+
+async def main():
+    # Load scrim commands
+    await scrim.setup(bot)
 
 try:
     Thread(target=run_flask).start()
