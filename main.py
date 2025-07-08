@@ -1660,10 +1660,11 @@ async def list_social_trackers(interaction: discord.Interaction):
             ),
             ephemeral=True
         )
-    
     guild_id = str(interaction.guild.id)
+    # Debug print
+    print(f"[DEBUG] Current guild_id: {guild_id}")
+    print(f"[DEBUG] social_trackers keys: {list(social_trackers.keys())}")
     trackers = social_trackers.get(guild_id, [])
-    
     if not trackers:
         return await interaction.response.send_message(
             embed=create_embed(
@@ -1673,19 +1674,16 @@ async def list_social_trackers(interaction: discord.Interaction):
             ),
             ephemeral=True
         )
-    
     embed = discord.Embed(
         title="📊 Active Social Trackers",
         color=discord.Color.blue(),
         timestamp=datetime.utcnow()
     )
-    
     for i, tracker in enumerate(trackers, 1):
         channel = interaction.guild.get_channel(int(tracker['post_channel']))
         count = tracker.get('last_count', 'N/A')
         if isinstance(count, int):
             count = f"{count:,}"
-            
         embed.add_field(
             name=f"{i}. {tracker['account_name']}",
             value=(
@@ -1696,7 +1694,6 @@ async def list_social_trackers(interaction: discord.Interaction):
             ),
             inline=False
         )
-    
     embed.set_footer(text="Nexus Esports Social Tracker")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
