@@ -272,6 +272,11 @@ async def on_ready():
         bot.event_task = bot.loop.create_task(event_schedule_notifier())
         print("✅ Started tournament event schedule task")
 
+# Load configs on startup
+load_config()
+load_social_trackers()
+load_event_schedule()
+
 # Background task for social updates
 
 async def check_social_updates():
@@ -1787,6 +1792,6 @@ except discord.LoginFailure:
 except Exception as e:
     print(f"❌ Unexpected error: {e}")
 
-# to load scrim commands
+# Add this at the end of your main file to load scrim commands
 from scrim import setup_scrim_commands
 setup_scrim_commands(bot)
