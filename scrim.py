@@ -357,21 +357,21 @@ async def setup(bot):
                 if is_admin_or_permitted(message):
                     return
                 
-                # Only allow registration messages from non-admin users
-                mentions = [m for m in message.mentions if not m.bot]
-                valid_mention_count = event['team_size'] - 1
+                # Process registration message
+                mentions = [m for m in message.mentions if not m.bot and m != message.author]
+                required_mentions = event['team_size'] - 1
                 
                 # Validate registration message
-                if len(mentions) != valid_mention_count:
+                if len(mentions) != required_mentions:
                     try:
                         await message.delete()
-                        await message.author.send(
-                            f"❌ Invalid registration message in {message.channel.mention}. "
-                            f"You must mention exactly {valid_mention_count} teammates. "
-                            "Your message has been deleted.",
-                            delete_after=15
+                        guide = (
+                            f"❌ Invalid registration in {message.channel.mention}. "
+                            f"You need to mention exactly {required_mentions} teammates (excluding yourself).\n"
+                            f"Example: {' '.join([f'@{message.author.name}'] + [f'@teammate{i+1}' for i in range(required_mentions)])}"
                         )
-                    except:
+                        await message.author.send(guide, delete_after=30)
+                    except discord.Forbidden:
                         pass
                     return
                 
@@ -380,11 +380,10 @@ async def setup(bot):
                     try:
                         await message.delete()
                         await message.author.send(
-                            f"❌ You are already registered in this event. "
-                            "Your message has been deleted.",
+                            "❌ You are already registered in this event.",
                             delete_after=15
                         )
-                    except:
+                    except discord.Forbidden:
                         pass
                     return
                 
@@ -395,68 +394,41 @@ async def setup(bot):
                         try:
                             await message.delete()
                             await message.author.send(
-                                "❌ One or more mentioned users are already registered. "
-                                "Your message has been deleted.",
+                                "❌ One or more mentioned users are already registered.",
                                 delete_after=15
                             )
-                        except:
+                        except discord.Forbidden:
                             pass
                         return
                 
-                # Check for duplicate members
-                if len(set(mentioned_ids)) != valid_mention_count:
+                # Check for duplicate mentions
+                if len(set(mentioned_ids)) != len(mentions):
                     try:
                         await message.delete()
                         await message.author.send(
-                            "❌ You mentioned duplicate users. "
-                            "Your message has been deleted.",
+                            "❌ You mentioned the same user multiple times.",
                             delete_after=15
                         )
-                    except:
+                    except discord.Forbidden:
                         pass
                     return
                 
-                # Register team
-                member_ids = [message.author.id] + mentioned_ids
-                team = {
-                    'team_name': f"Team-{len(event['teams'])+1}",
-                    'captain_id': message.author.id,
-                    'members': [message.author.mention] + [m.mention for m in mentions],
-                    'member_ids': member_ids
-                }
-                event['teams'].append(team)
-                
-                # Send public confirmation
-                public_view = PublicTeamView(event_id, message.author.id)
-                await message.channel.send(
-                    f"✅ Team '{team['team_name']}' registered! Team leader: {message.author.mention}\n"
-                    "Use the button below to view the team.",
-                    view=public_view
-                )
-                
-                # Send private management view to leader
-                try:
-                    embed = discord.Embed(
-                        title=f"Team '{team['team_name']}' Registered",
-                        description="You can manage your team using the buttons below:",
-                        color=discord.Color.green()
-                    )
-                    await message.author.send(embed=embed, view=TeamManageView(event_id, message.author.id))
-                except discord.Forbidden:
-                    pass
-                
-                # Update team list
-                await update_scrim_team_list(event, bot)
-                
-                # Delete original message
+                # All checks passed - proceed with registration
                 try:
                     await message.delete()
-                except:
+                except discord.NotFound:
                     pass
                 
-                # Check if slots filled
-                if len(event['teams']) >= event['slots']:
-                    await notify_scrim_organizer(event, bot)
+                # Send team name modal
+                await message.channel.send(
+                    f"{message.author.mention}, please enter your team name:",
+                    delete_after=15
+                )
+                
+                # Create and send the modal
+                modal = TeamNameModal(event_id, [str(m.id) for m in mentions])
+                await message.author.send("Please enter your team name:", view=modal)
+                await modal.wait()
                 
                 return
         await bot.process_commands(message)
