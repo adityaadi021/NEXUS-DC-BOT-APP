@@ -500,9 +500,9 @@ async def setup(bot):
                 try:
                     modal = TeamNameModal(event_id, [str(m.id) for m in mentions])
                     class StartTeamNameModalButton(View):
-    def __init__(self, event_id, member_ids):
-        super().__init__(timeout=60)
-        self.add_item(self.TeamNameButton(event_id, member_ids))
+                        def __init__(self, event_id, member_ids):
+                            super().__init__(timeout=60)
+                            self.add_item(self.TeamNameButton(event_id, member_ids))
 
     class TeamNameButton(Button):
         def __init__(self, event_id, member_ids):
