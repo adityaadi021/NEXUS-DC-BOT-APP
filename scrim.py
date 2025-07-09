@@ -164,9 +164,10 @@ async def setup(bot):
         team_size: Optional[int] = 4,
         event_name: Optional[str] = "Scrim Event"
     ):
-        if not interaction.user.guild_permissions.manage_guild:
+        # Allow ADMINISTRATORs to use this command
+        if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator):
             return await interaction.response.send_message(
-                "❌ You need 'Manage Server' permission to create a scrim event.", ephemeral=True
+                "❌ You need 'Manage Server' or 'Administrator' permission to create a scrim event.", ephemeral=True
             )
         event_id = f"{interaction.guild.id}-{int(datetime.utcnow().timestamp())}"
         scrim_events[event_id] = {
@@ -223,8 +224,9 @@ async def setup(bot):
     @bot.tree.command(name="remove-scrim-event", description="Remove a scrim event by its event ID (Admin only)")
     @app_commands.describe(event_id="The event ID to remove (see /list-scrim-events)")
     async def remove_scrim_event(interaction: discord.Interaction, event_id: str):
-        if not interaction.user.guild_permissions.manage_guild:
-            return await interaction.response.send_message("❌ You need 'Manage Server' permission to remove a scrim event.", ephemeral=True)
+        # Allow ADMINISTRATORs to use this command
+        if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator):
+            return await interaction.response.send_message("❌ You need 'Manage Server' or 'Administrator' permission to remove a scrim event.", ephemeral=True)
         event = scrim_events.get(event_id)
         if not event or not str(event_id).startswith(str(interaction.guild.id)):
             return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
