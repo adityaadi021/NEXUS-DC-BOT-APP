@@ -64,6 +64,70 @@ event_schedule = {}
 SOCIAL_FILE = "social_trackers.json"
 social_trackers = {}
 
+# Add this near your other initialization code (around line 20)
+AVATAR_FILE = "bot_avatar.png"  # or .gif for animated
+BANNER_FILE = "bot_banner.png"
+
+async def set_bot_assets_on_startup():
+    """Automatically set bot avatar and banner on startup if files exist"""
+    try:
+        # Set Avatar (supports PNG/JPEG/GIF)
+        if os.path.exists(AVATAR_FILE):
+            with open(AVAR_FILE, "rb") as f:
+                await bot.user.edit(avatar=f.read())
+            print("✅ Bot avatar set automatically!")
+        
+        # Set Banner (requires PNG/JPEG)
+        if os.path.exists(BANNER_FILE):
+            with open(BANNER_FILE, "rb") as f:
+                await bot.user.edit(banner=f.read())
+            print("✅ Bot banner set automatically!")
+    except Exception as e:
+        print(f"⚠️ Failed to set bot assets on startup: {e}")
+
+# Modify your existing on_ready() event (around line 220)
+@bot.event
+async def on_ready():
+    global commands_synced
+    print(f"✅ Bot ready! Logged in as {bot.user}")
+    
+    # Print invite link with proper scopes
+    invite_url = discord.utils.oauth_url(
+        bot.user.id,
+        permissions=discord.Permissions(
+            send_messages=True,
+            embed_links=True,
+            view_channel=True,
+            read_message_history=True,
+            mention_everyone=True,
+            manage_messages=True,
+            attach_files=True
+        ),
+        scopes=("bot", "applications.commands")
+    )
+    print(f"\n🔗 Add bot to other servers using this link (MUST include 'applications.commands' scope):\n{invite_url}\n")
+    
+    # Auto-set bot assets
+    await set_bot_assets_on_startup()
+    
+    if not commands_synced:
+        try:
+            synced = await bot.tree.sync()
+            commands_synced = True
+            print(f"✅ Synced {len(synced)} command(s) globally")
+        except Exception as e:
+            print(f"❌ Command sync failed: {e}")
+    
+    # Start background tasks
+    if not hasattr(bot, 'social_task'):
+        bot.social_task = bot.loop.create_task(social_update_task())
+        print("✅ Started social media tracking task")
+
+    if not hasattr(bot, 'event_task'):
+        bot.event_task = bot.loop.create_task(event_schedule_notifier())
+        print("✅ Started tournament event schedule task")
+
+        
 # Load configs on startup
 def load_config():
     global guild_configs
@@ -1818,50 +1882,3 @@ if __name__ == "__main__":
         print("❌ Invalid token. Check your DISCORD_TOKEN")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
-
-@bot.tree.command(name="set-bot-assets", description="Set bot avatar and banner from local files (Bot Owner only)")
-async def set_bot_assets(interaction: discord.Interaction):
-    """Set bot's global avatar and banner (Bot Owner only)"""
-    # Get application info to verify owner
-    app_info = await bot.application_info()
-    if interaction.user.id != app_info.owner.id:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="Only the bot owner can change bot assets",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    
-    results = []
-    
-    # Try to set avatar (GIF supported)
-    try:
-        with open("bot_avatar.gif", "rb") as f:
-            avatar_bytes = f.read()
-        await bot.user.edit(avatar=avatar_bytes)
-        results.append("✅ Bot avatar updated (GIF)")
-    except FileNotFoundError:
-        results.append("❌ Avatar file not found: bot_avatar.gif")
-    except discord.HTTPException as e:
-        results.append(f"❌ Failed to set avatar: {e}")
-    
-    # Try to set banner
-    try:
-        with open("bot_banner.png", "rb") as f:
-            banner_bytes = f.read()
-        await bot.user.edit(banner=banner_bytes)
-        results.append("✅ Bot banner updated")
-    except FileNotFoundError:
-        results.append("❌ Banner file not found: bot_banner.png")
-    except discord.HTTPException as e:
-        results.append(f"⚠️ Banner not set (may require verification): {e}")
-    
-    # Send results
-    embed = create_embed(
-        title="🔄 Bot Assets Update",
-        description="\n".join(results),
-        color=discord.Color.blue()
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
