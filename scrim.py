@@ -40,7 +40,39 @@ class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
             'members': [interaction.user.mention] + mentions
         }
         event['teams'].append(team)
-        await interaction.response.send_message(f"✅ Team '{self.team_name.value}' registered!", ephemeral=True)
+        # --- Create private channel for the team ---
+        guild = interaction.guild
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        }
+        # Add all team members
+        member_ids = [interaction.user.id] + [int(m[2:-1]) for m in mentions if m.startswith('<@') and m[2:-1].isdigit()]
+        for member_id in member_ids:
+            member = guild.get_member(member_id)
+            if member:
+                overwrites[member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        # Allow admins (manage_guild) to see all channels
+        for role in guild.roles:
+            if role.permissions.administrator or role.permissions.manage_guild:
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+        category = None
+        # Try to find or create a category for scrims
+        for cat in guild.categories:
+            if cat.name.lower().startswith("scrims"):
+                category = cat
+                break
+        if not category:
+            category = await guild.create_category_channel("Scrims")
+        channel_name = f"scrim-{event['event_name'].replace(' ', '-')[:20].lower()}-{self.team_name.value.replace(' ', '-')[:16].lower()}"
+        team_channel = await guild.create_text_channel(
+            channel_name,
+            overwrites=overwrites,
+            category=category,
+            topic=f"Private channel for team {self.team_name.value} in {event['event_name']}"
+        )
+        # Save channel ID in team info
+        team['channel_id'] = team_channel.id
+        await interaction.response.send_message(f"✅ Team '{self.team_name.value}' registered! Private channel created: {team_channel.mention}", ephemeral=True)
         # Update team list in channel
         await update_scrim_team_list(event, interaction.client)
         # Check if slots filled
@@ -159,3 +191,60 @@ async def setup(bot):
         view = ScrimRegisterView(event_id)
         await channel.send(embed=embed, view=view)
         await interaction.response.send_message(f"✅ Scrim registration started in {channel.mention}", ephemeral=True)
+
+    @bot.tree.command(name="list-scrim-events", description="List all active scrim events in this server")
+    async def list_scrim_events(interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+        events = [e for e in scrim_events.values() if str(e['event_id']).startswith(guild_id)]
+        if not events:
+            return await interaction.response.send_message("No active scrim events found.", ephemeral=True)
+        embed = discord.Embed(
+            title="Active Scrim Events",
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        for i, event in enumerate(events, 1):
+            embed.add_field(
+                name=f"{i}. {event['event_name']}",
+                value=(
+                    f"Teams: {len(event['teams'])}/{event['slots']}\n"
+                    f"Channel: <#{event['channel_id']}>\n"
+                    f"Organizer: <@{event['organizer_id']}>\n"
+                    f"Event ID: `{event['event_id']}`"
+                ),
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="remove-scrim-event", description="Remove a scrim event by its event ID (Admin only)")
+    @app_commands.describe(event_id="The event ID to remove (see /list-scrim-events)")
+    async def remove_scrim_event(interaction: discord.Interaction, event_id: str):
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ You need 'Manage Server' permission to remove a scrim event.", ephemeral=True)
+        event = scrim_events.get(event_id)
+        if not event or not str(event_id).startswith(str(interaction.guild.id)):
+            return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
+        del scrim_events[event_id]
+        await interaction.response.send_message(f"✅ Scrim event `{event_id}` removed.", ephemeral=True)
+
+    @bot.tree.command(name="view-scrim-teams", description="View all teams registered for a scrim event (by event ID)")
+    @app_commands.describe(event_id="The event ID to view teams for (see /list-scrim-events)")
+    async def view_scrim_teams(interaction: discord.Interaction, event_id: str):
+        event = scrim_events.get(event_id)
+        if not event or not str(event_id).startswith(str(interaction.guild.id)):
+            return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
+        if not event['teams']:
+            return await interaction.response.send_message("No teams registered yet for this event.", ephemeral=True)
+        embed = discord.Embed(
+            title=f"Teams for {event['event_name']}",
+            color=discord.Color.purple(),
+            timestamp=datetime.utcnow()
+        )
+        for i, team in enumerate(event['teams'], 1):
+            embed.add_field(
+                name=f"{i}. {team['team_name']}",
+                value=", ".join(team['members']),
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
