@@ -454,8 +454,21 @@ async def check_youtube_update(guild_id, tracker):
             live_title = live_video['snippet']['title']
             live_thumb = live_video['snippet']['thumbnails']['high']['url']
 
-            # Only notify if live_video_id exists and is different
-            if live_video_id and tracker.get("last_live_video_id") != live_video_id:
+            # --- Improved notification logic ---
+            now = datetime.utcnow().timestamp()
+            cooldown = 30 * 60  # 30 minutes in seconds
+            last_notified = tracker.get('last_live_notified', 0)
+            last_live_id = tracker.get('last_live_video_id')
+
+            should_notify = False
+            if live_video_id != last_live_id:
+                # New live stream detected
+                should_notify = True
+            elif now - last_notified > cooldown:
+                # Same stream, but cooldown passed
+                should_notify = True
+
+            if should_notify:
                 embed = discord.Embed(
                     title=f"🔴 {tracker['account_name']} is LIVE!",
                     url=f"https://youtu.be/{live_video_id}",
@@ -464,13 +477,12 @@ async def check_youtube_update(guild_id, tracker):
                     timestamp=datetime.utcnow()
                 )
                 embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
-                # Move thumbnail to bottom and make it bigger
                 embed.set_image(url=live_thumb)
-                # Remove set_thumbnail if present
                 channel = bot.get_channel(int(tracker['post_channel']))
                 if channel:
                     await channel.send(embed=embed)
                 tracker['last_live_video_id'] = live_video_id
+                tracker['last_live_notified'] = now
                 save_social_trackers()
 
     # FIX 4: Add proper error handling
