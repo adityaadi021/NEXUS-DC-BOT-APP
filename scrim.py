@@ -2,13 +2,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Modal, TextInput, View, Button
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import asyncio
+import re
 
 # Global storage for how-to channels
 how_to_channels = {}
 scrim_events = {}
+scrim_reminders = {}
 
 async def create_how_to_channel(guild):
     """Create or fetch how-to-register channel in Scrims category"""
@@ -156,7 +158,7 @@ class ChangeTeamNameModal(Modal, title="Change Team Name"):
             await interaction.response.send_message("❌ Team not found.", ephemeral=True)
             return
         
-        if any(t['team_name'].lower() == self.team_name.value.lower() for t in event['teams']):
+        if any(t['team_name'].lower() == self.team_name.value.lower() for t in event['teams'] if t != team):
             await interaction.response.send_message("❌ Team name already taken.", ephemeral=True)
             return
         
@@ -171,32 +173,47 @@ class CancelSlotButton(Button):
         self.team_leader_id = team_leader_id
     
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.team_leader_id:
-            await interaction.response.send_message("❌ Only the team leader can cancel the slot.", ephemeral=True)
-            return
-        
-        event = scrim_events.get(self.event_id)
-        if not event:
-            await interaction.response.send_message("❌ Scrim event not found.", ephemeral=True)
-            return
-        
-        team = next((t for t in event['teams'] if t['captain_id'] == self.team_leader_id), None)
-        if not team:
-            await interaction.response.send_message("❌ Team not found.", ephemeral=True)
-            return
-        
-        # Remove permissions first
-        scrim_channel = interaction.guild.get_channel(event['channel_id'])
-        if scrim_channel:
-            for member_id in team['member_ids']:
-                member = interaction.guild.get_member(member_id)
-                if member:
-                    await scrim_channel.set_permissions(member, overwrite=None)
-        
-        # Then remove team from event
-        event['teams'].remove(team)
-        await interaction.response.send_message("✅ Your team slot has been cancelled.", ephemeral=True)
-        await update_scrim_team_list(event, interaction.client)
+        try:
+            if interaction.user.id != self.team_leader_id:
+                await interaction.response.send_message("❌ Only the team leader can cancel the slot.", ephemeral=True)
+                return
+            
+            event = scrim_events.get(self.event_id)
+            if not event:
+                await interaction.response.send_message("❌ Scrim event not found.", ephemeral=True)
+                return
+            
+            team = next((t for t in event['teams'] if t['captain_id'] == self.team_leader_id), None)
+            if not team:
+                await interaction.response.send_message("❌ Team not found.", ephemeral=True)
+                return
+            
+            # Remove permissions first
+            scrim_channel = interaction.guild.get_channel(event['channel_id'])
+            if scrim_channel:
+                for member_id in team['member_ids']:
+                    member = interaction.guild.get_member(member_id)
+                    if member:
+                        try:
+                            await scrim_channel.set_permissions(member, overwrite=None)
+                        except discord.NotFound:
+                            pass  # Channel might be deleted
+            
+            # Then remove team from event
+            event['teams'].remove(team)
+            await interaction.response.send_message("✅ Your team slot has been cancelled.", ephemeral=True)
+            await update_scrim_team_list(event, interaction.client)
+            
+            # If slots were full and now aren't, update status
+            if len(event['teams']) < event['slots'] and event.get('slots_filled'):
+                event['slots_filled'] = False
+                scrim_channel = interaction.guild.get_channel(event['channel_id'])
+                if scrim_channel:
+                    await scrim_channel.send(f"⚠️ Slot available! Teams registered: {len(event['teams'])}/{event['slots']}")
+            
+        except Exception as e:
+            print(f"Error in CancelSlotButton: {e}")
+            await interaction.response.send_message("❌ An error occurred. Please try again later.", ephemeral=True)
 
 class ViewTeamButton(Button):
     def __init__(self, event_id, team_leader_id):
@@ -235,13 +252,13 @@ async def update_scrim_team_list(event, bot):
         color=discord.Color.blue(),
         timestamp=datetime.utcnow()
     )
+    embed.set_footer(text=f"Teams: {len(event['teams'])}/{event['slots']}")
     
     if event.get('team_list_msg_id'):
         try:
             msg = await channel.fetch_message(event['team_list_msg_id'])
             await msg.edit(embed=embed)
-        except Exception as e:
-            print(f"Error updating team list message: {e}")
+        except:
             msg = await channel.send(embed=embed)
             event['team_list_msg_id'] = msg.id
     else:
@@ -300,6 +317,7 @@ async def notify_scrim_organizer(event, bot):
     # 1. Announce in scrim channel first
     channel = bot.get_channel(event['channel_id'])
     if channel:
+        event['slots_filled'] = True
         await channel.send("🎉 **All slots filled!** Organizer is setting the scrim time...")
     
     # 2. Create private channel for organizer and admins
@@ -318,7 +336,7 @@ async def notify_scrim_organizer(event, bot):
     # 3. Send message with time setting button
     embed = discord.Embed(
         title=f"🏆 {event['event_name']} - All Slots Filled!",
-        description="Click the button below to set the scrim start time.",
+        description="Click the button below to set the scrim start time and details.",
         color=discord.Color.gold()
     )
     view = SetScrimTimeView(event['event_id'])
@@ -343,11 +361,19 @@ class ScrimTimeModal(Modal, title="Set Scrim Time"):
         super().__init__()
         self.event_id = event_id
         self.scrim_time = TextInput(
-            label="Scrim Start Time (e.g. 2025-07-10 18:30)",
-            placeholder="YYYY-MM-DD HH:MM",
+            label="Scrim Start Time (e.g. 10-07-2025 18:30)",
+            placeholder="DD-MM-YYYY HH:MM (24h format, IST timezone)",
             required=True
         )
+        self.scrim_details = TextInput(
+            label="Scrim Details (format, rules, etc.)",
+            style=discord.TextStyle.long,
+            required=True,
+            placeholder="Example: BO3, Map Pool: Bind, Haven, Split...",
+            max_length=1000
+        )
         self.add_item(self.scrim_time)
+        self.add_item(self.scrim_details)
     
     async def on_submit(self, interaction: discord.Interaction):
         event = scrim_events.get(self.event_id)
@@ -355,26 +381,110 @@ class ScrimTimeModal(Modal, title="Set Scrim Time"):
             await interaction.response.send_message("❌ Scrim event not found.", ephemeral=True)
             return
         
-        event['scrim_time'] = self.scrim_time.value
+        # Parse and validate time (IST format)
+        time_str = self.scrim_time.value
+        try:
+            # Parse DD-MM-YYYY HH:MM
+            dt = datetime.strptime(time_str, "%d-%m-%Y %H:%M")
+            # Convert to UTC (IST is UTC+5:30)
+            utc_time = dt - timedelta(hours=5, minutes=30)
+            if utc_time < datetime.utcnow():
+                raise ValueError("Time must be in future")
+        except Exception as e:
+            await interaction.response.send_message(
+                "❌ Invalid time format or time in past. Use DD-MM-YYYY HH:MM (24h format, IST timezone)",
+                ephemeral=True
+            )
+            return
+        
+        event['scrim_time'] = dt.strftime("%d-%m-%Y %H:%M IST")
+        event['scrim_details'] = self.scrim_details.value
+        event['scrim_utc'] = utc_time
         
         # Announce in scrim channel
         scrim_channel = interaction.guild.get_channel(event['channel_id'])
         if scrim_channel:
+            # Mention all registered members
+            all_member_ids = set()
+            for team in event['teams']:
+                for member_id in team['member_ids']:
+                    all_member_ids.add(member_id)
+            
+            mentions = " ".join([f"<@{mid}>" for mid in all_member_ids])
+            
             embed = discord.Embed(
                 title=f"🏆 {event['event_name']} - Scrim Scheduled!",
-                description=f"**Start Time:** {self.scrim_time.value}",
+                description=(
+                    f"**Start Time:** {event['scrim_time']}\n"
+                    f"**Details:**\n{self.scrim_details.value}\n\n"
+                    f"{mentions}"
+                ),
                 color=discord.Color.green()
             )
             await scrim_channel.send(embed=embed)
+            
+            # Set reminder
+            await schedule_scrim_reminder(event, interaction.client)
         
-        # Also notify in organizer channel
+        # Notify in organizer channel
         await interaction.response.send_message(
-            f"✅ Scrim time set to {self.scrim_time.value}",
+            f"✅ Scrim time set to {event['scrim_time']}\n"
+            f"Reminder scheduled for all participants.",
             ephemeral=False
         )
 
+async def schedule_scrim_reminder(event, bot):
+    """Schedule a reminder 30 minutes before scrim start"""
+    if 'scrim_utc' not in event:
+        return
+    
+    reminder_time = event['scrim_utc'] - timedelta(minutes=30)
+    now = datetime.utcnow()
+    
+    if reminder_time < now:
+        return  # Skip if reminder time already passed
+    
+    delay = (reminder_time - now).total_seconds()
+    
+    # Store task for later cancellation if needed
+    event_id = event['event_id']
+    
+    async def send_reminder():
+        await asyncio.sleep(delay)
+        
+        # Check if event still exists
+        event = scrim_events.get(event_id)
+        if not event:
+            return
+        
+        channel = bot.get_channel(event['channel_id'])
+        if not channel:
+            return
+        
+        # Mention all registered members
+        all_member_ids = set()
+        for team in event['teams']:
+            for member_id in team['member_ids']:
+                all_member_ids.add(member_id)
+        
+        mentions = " ".join([f"<@{mid}>" for mid in all_member_ids])
+        
+        embed = discord.Embed(
+            title=f"⏰ {event['event_name']} - Starting Soon!",
+            description=(
+                f"**Scrim starts in 30 minutes!**\n"
+                f"**Start Time:** {event['scrim_time']}\n\n"
+                f"{mentions}"
+            ),
+            color=discord.Color.gold()
+        )
+        await channel.send(embed=embed)
+    
+    # Store and run task
+    task = asyncio.create_task(send_reminder())
+    scrim_reminders[event_id] = task
+
 async def setup(bot):
-    # Debug message to confirm setup is running
     print("Scrim commands setup started...")
     
     def is_flasherx7(interaction):
@@ -401,14 +511,13 @@ async def setup(bot):
         event_name: Optional[str] = "Scrim Event",
         description: Optional[str] = "Register your team for the scrim!"
     ):
-        # Debug message
         print(f"Add scrim event command received from {interaction.user}")
         
         if not (interaction.user.guild_permissions.manage_guild or 
                 interaction.user.guild_permissions.administrator or 
                 is_flasherx7(interaction)):
             return await interaction.response.send_message(
-                "❌ You need 'Manage Server', 'Administrator' permission, or be flasherx7 to create a scrim event.", 
+                "❌ You need 'Administrator' permission to create a scrim event.", 
                 ephemeral=True
             )
         
@@ -455,7 +564,8 @@ async def setup(bot):
             'teams': [],
             'team_list_msg_id': None,
             'scrim_time': None,
-            'organizer_channel_id': None
+            'organizer_channel_id': None,
+            'slots_filled': False
         }
         
         embed = discord.Embed(
@@ -499,45 +609,34 @@ async def setup(bot):
     
     @bot.event
     async def on_message(message):
-        # Debug message
-        print(f"Message received in {message.channel.name} from {message.author}")
-        
         if message.author.bot:
             return
         
         # Check if this is a registration channel
         for event_id, event in scrim_events.items():
             if message.channel.id == event['channel_id']:
-                print(f"Message detected in registration channel {message.channel.name}")
-                
                 # Allow commands to pass through
                 ctx = await bot.get_context(message)
                 if ctx.valid:
-                    print("Message is a command, processing...")
                     await bot.invoke(ctx)
                     return
                 
                 # Check if user has admin permissions
                 if message.author.guild_permissions.administrator:
-                    print("User is admin, skipping registration checks")
                     return
                 
                 # Check for permitted roles
                 permitted_roles = ["Scrim Admin", "Event Manager"]
                 user_roles = [role.name for role in message.author.roles]
                 if any(role in permitted_roles for role in user_roles):
-                    print("User has permitted role, skipping registration checks")
                     return
                 
                 # Process registration message
                 mentions = [m for m in message.mentions if not m.bot and m != message.author]
                 required_mentions = event['team_size'] - 1
                 
-                print(f"Found {len(mentions)} valid mentions (need {required_mentions})")
-                
                 # Validate registration message
                 if len(mentions) != required_mentions:
-                    print("Invalid number of mentions")
                     try:
                         await message.delete()
                         guide = (
@@ -547,7 +646,6 @@ async def setup(bot):
                         )
                         await message.author.send(guide, delete_after=30)
                     except discord.Forbidden:
-                        print("Couldn't send DM to user")
                         try:
                             await message.channel.send(
                                 f"{message.author.mention} Please check your DMs for registration instructions.",
@@ -555,13 +653,10 @@ async def setup(bot):
                             )
                         except:
                             pass
-                    except Exception as e:
-                        print(f"Error handling invalid registration: {e}")
                     return
                 
                 # Check if user is already registered
                 if any(message.author.id in t['member_ids'] for t in event['teams']):
-                    print("User already registered")
                     try:
                         await message.delete()
                         await message.author.send(
@@ -576,7 +671,6 @@ async def setup(bot):
                 mentioned_ids = [m.id for m in mentions]
                 for team in event['teams']:
                     if any(mid in team['member_ids'] for mid in mentioned_ids):
-                        print("Mentioned user already registered")
                         try:
                             await message.delete()
                             await message.author.send(
@@ -589,7 +683,6 @@ async def setup(bot):
                 
                 # Check for duplicate mentions
                 if len(set(mentioned_ids)) != len(mentions):
-                    print("Duplicate mentions detected")
                     try:
                         await message.delete()
                         await message.author.send(
@@ -601,13 +694,10 @@ async def setup(bot):
                     return
                 
                 # All checks passed - proceed with registration
-                print("All checks passed, proceeding with registration")
                 try:
                     await message.delete()
                 except discord.NotFound:
-                    print("Message already deleted")
-                except Exception as e:
-                    print(f"Error deleting message: {e}")
+                    pass
                 
                 # Send team name modal via button
                 try:
@@ -617,8 +707,7 @@ async def setup(bot):
                         view=view,
                         delete_after=60
                     )
-                except Exception as e:
-                    print(f"Error showing modal via button: {e}")
+                except:
                     await message.channel.send(
                         f"{message.author.mention}, an error occurred during registration. Please try again later.",
                         delete_after=15
@@ -630,7 +719,6 @@ async def setup(bot):
 
     @bot.tree.command(name="list-scrim-events", description="List all active scrim events in this server")
     async def list_scrim_events(interaction: discord.Interaction):
-        print("List scrim events command received")
         guild_id = str(interaction.guild.id)
         events = [e for e in scrim_events.values() if str(e['event_id']).startswith(guild_id)]
         
@@ -644,10 +732,10 @@ async def setup(bot):
         )
         
         for i, event in enumerate(events, 1):
+            status = "✅ Slots Filled" if len(event['teams']) >= event['slots'] else f"🟢 {len(event['teams'])}/{event['slots']} slots"
             embed.add_field(
-                name=f"{i}. {event['event_name']}",
+                name=f"{i}. {event['event_name']} - {status}",
                 value=(
-                    f"Teams: {len(event['teams'])}/{event['slots']}\n"
                     f"Channel: <#{event['channel_id']}>\n"
                     f"Organizer: <@{event['organizer_id']}>\n"
                     f"Event ID: `{event['event_id']}`"
@@ -660,19 +748,22 @@ async def setup(bot):
     @bot.tree.command(name="remove-scrim-event", description="Remove a scrim event by its event ID (Admin only)")
     @app_commands.describe(event_id="The event ID to remove (see /list-scrim-events)")
     async def remove_scrim_event(interaction: discord.Interaction, event_id: str):
-        print(f"Remove scrim event command received for {event_id}")
-        
         if not (interaction.user.guild_permissions.manage_guild or 
                 interaction.user.guild_permissions.administrator or 
                 is_flasherx7(interaction)):
             return await interaction.response.send_message(
-                "❌ You need 'Manage Server', 'Administrator' permission, or be flasherx7 to remove a scrim event.", 
+                "❌ You need 'Administrator' permission to remove a scrim event.", 
                 ephemeral=True
             )
         
         event = scrim_events.get(event_id)
         if not event or not str(event_id).startswith(str(interaction.guild.id)):
             return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
+        
+        # Cancel any scheduled reminders
+        if event_id in scrim_reminders:
+            scrim_reminders[event_id].cancel()
+            del scrim_reminders[event_id]
         
         # Delete organizer channel if exists
         if event.get('organizer_channel_id'):
@@ -683,14 +774,20 @@ async def setup(bot):
             except:
                 pass
         
+        # Delete registration channel
+        try:
+            channel = interaction.guild.get_channel(event['channel_id'])
+            if channel:
+                await channel.delete(reason="Scrim event removed")
+        except:
+            pass
+        
         del scrim_events[event_id]
         await interaction.response.send_message(f"✅ Scrim event `{event_id}` removed.", ephemeral=True)
 
     @bot.tree.command(name="view-scrim-teams", description="View all teams registered for a scrim event (by event ID)")
     @app_commands.describe(event_id="The event ID to view teams for (see /list-scrim-events)")
     async def view_scrim_teams(interaction: discord.Interaction, event_id: str):
-        print(f"View scrim teams command received for {event_id}")
-        
         event = scrim_events.get(event_id)
         if not event or not str(event_id).startswith(str(interaction.guild.id)):
             return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
@@ -713,6 +810,4 @@ async def setup(bot):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # Debug message when setup completes
     print("Scrim commands setup completed successfully")
-    
