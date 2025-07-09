@@ -383,6 +383,21 @@ async def setup(bot):
                 ephemeral=True
             )
 
+    class StartTeamNameModalButton(View):
+    def __init__(self, event_id, member_ids):
+        super().__init__(timeout=60)
+        self.add_item(self.TeamNameButton(event_id, member_ids))
+
+    class TeamNameButton(Button):
+        def __init__(self, event_id, member_ids):
+            super().__init__(label="Enter Team Name", style=discord.ButtonStyle.primary)
+            self.event_id = event_id
+            self.member_ids = member_ids
+
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.send_modal(TeamNameModal(self.event_id, self.member_ids))
+
+    
     @bot.event
     async def on_message(message):
         # Debug message
@@ -499,19 +514,7 @@ async def setup(bot):
                 # Send team name modal
                 try:
                     modal = TeamNameModal(event_id, [str(m.id) for m in mentions])
-                    class StartTeamNameModalButton(View):
-                        def __init__(self, event_id, member_ids):
-                            super().__init__(timeout=60)
-                            self.add_item(self.TeamNameButton(event_id, member_ids))
-
-    class TeamNameButton(Button):
-        def __init__(self, event_id, member_ids):
-            super().__init__(label="Enter Team Name", style=discord.ButtonStyle.primary)
-            self.event_id = event_id
-            self.member_ids = member_ids
-
-        async def callback(self, interaction: discord.Interaction):
-            await interaction.response.send_modal(TeamNameModal(self.event_id, self.member_ids))
+                    
 
 # In on_message when all checks pass:
 try:
@@ -533,10 +536,7 @@ except Exception as e:
         delete_after=15
     )
 
-                    await message.channel.send(
-                        f"{message.author.mention}, please check your DMs to complete registration.",
-                        delete_after=15
-                    )
+                    
                 except discord.Forbidden:
                     print("Couldn't send DM to user")
                     await message.channel.send(
