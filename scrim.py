@@ -248,38 +248,130 @@ async def update_scrim_team_list(event, bot):
         msg = await channel.send(embed=embed)
         event['team_list_msg_id'] = msg.id
 
+async def create_organizer_channel(event, bot):
+    """Create private channel for organizer and admins"""
+    guild = bot.get_guild(int(event['event_id'].split('-')[0]))
+    if not guild:
+        return None
+    
+    # Find or create Scrims category
+    category = discord.utils.get(guild.categories, name="Scrims")
+    if not category:
+        category = await guild.create_category("Scrims")
+    
+    # Find Scrim Mod role
+    scrim_mod_role = discord.utils.get(guild.roles, name="Scrim Mod")
+    
+    # Create permission overwrites
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.me: discord.PermissionOverwrite(view_channel=True)
+    }
+    
+    # Add organizer
+    organizer = guild.get_member(event['organizer_id'])
+    if organizer:
+        overwrites[organizer] = discord.PermissionOverwrite(view_channel=True)
+    
+    # Add Scrim Mod role if exists
+    if scrim_mod_role:
+        overwrites[scrim_mod_role] = discord.PermissionOverwrite(view_channel=True)
+    
+    # Add admins
+    for member in guild.members:
+        if member.guild_permissions.administrator:
+            overwrites[member] = discord.PermissionOverwrite(view_channel=True)
+    
+    # Create channel
+    channel_name = f"scrim-admin-{event['event_name'][:20].lower().replace(' ', '-')}"
+    try:
+        channel = await category.create_text_channel(
+            name=channel_name,
+            overwrites=overwrites,
+            topic=f"Admin channel for {event['event_name']}"
+        )
+        return channel
+    except Exception as e:
+        print(f"Error creating organizer channel: {e}")
+        return None
+
 async def notify_scrim_organizer(event, bot):
-    """Notify organizer AND channel when slots fill"""
+    """Notify organizer AND channel when slots fill and create private channel"""
     # 1. Announce in scrim channel first
     channel = bot.get_channel(event['channel_id'])
     if channel:
         await channel.send("🎉 **All slots filled!** Organizer is setting the scrim time...")
     
-    # 2. Send modal to organizer
-    user = await bot.fetch_user(event['organizer_id'])
-    if not user:
+    # 2. Create private channel for organizer and admins
+    organizer_channel = await create_organizer_channel(event, bot)
+    if not organizer_channel:
+        try:
+            organizer = await bot.fetch_user(event['organizer_id'])
+            await organizer.send(f"Failed to create admin channel for '{event['event_name']}'.")
+        except:
+            pass
         return
+    
+    # Store channel ID in event
+    event['organizer_channel_id'] = organizer_channel.id
+    
+    # 3. Send message with time setting button
+    embed = discord.Embed(
+        title=f"🏆 {event['event_name']} - All Slots Filled!",
+        description="Click the button below to set the scrim start time.",
+        color=discord.Color.gold()
+    )
+    view = SetScrimTimeView(event['event_id'])
+    await organizer_channel.send(embed=embed, view=view)
 
-    class ScrimTimeModal(Modal, title="Set Scrim Time"):
-        scrim_time = TextInput(label="Scrim Start Time (e.g. 2025-07-10 18:30)", required=True)
+class SetScrimTimeView(View):
+    def __init__(self, event_id):
+        super().__init__(timeout=None)
+        self.event_id = event_id
+        self.add_item(SetScrimTimeButton(event_id))
+
+class SetScrimTimeButton(Button):
+    def __init__(self, event_id):
+        super().__init__(label="Set Scrim Time", style=discord.ButtonStyle.primary)
+        self.event_id = event_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ScrimTimeModal(self.event_id))
+
+class ScrimTimeModal(Modal, title="Set Scrim Time"):
+    def __init__(self, event_id):
+        super().__init__()
+        self.event_id = event_id
+        self.scrim_time = TextInput(
+            label="Scrim Start Time (e.g. 2025-07-10 18:30)",
+            placeholder="YYYY-MM-DD HH:MM",
+            required=True
+        )
+        self.add_item(self.scrim_time)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        event = scrim_events.get(self.event_id)
+        if not event:
+            await interaction.response.send_message("❌ Scrim event not found.", ephemeral=True)
+            return
         
-        async def on_submit(self, interaction: discord.Interaction):
-            event['scrim_time'] = self.scrim_time.value
-            channel = bot.get_channel(event['channel_id'])
-            if channel:
-                embed = discord.Embed(
-                    title=f"🏆 {event['event_name']} - Scrim Scheduled!",
-                    description=f"**Start Time:** {self.scrim_time.value}",
-                    color=discord.Color.green()
-                )
-                await channel.send(embed=embed)
-            await interaction.response.send_message("✅ Scrim time announced!", ephemeral=True)
-
-    try:
-        await user.send(f"All slots filled for '{event['event_name']}'! Set the time:")
-        await user.send_modal(ScrimTimeModal())
-    except Exception as e:
-        print(f"Error notifying organizer: {e}")
+        event['scrim_time'] = self.scrim_time.value
+        
+        # Announce in scrim channel
+        scrim_channel = interaction.guild.get_channel(event['channel_id'])
+        if scrim_channel:
+            embed = discord.Embed(
+                title=f"🏆 {event['event_name']} - Scrim Scheduled!",
+                description=f"**Start Time:** {self.scrim_time.value}",
+                color=discord.Color.green()
+            )
+            await scrim_channel.send(embed=embed)
+        
+        # Also notify in organizer channel
+        await interaction.response.send_message(
+            f"✅ Scrim time set to {self.scrim_time.value}",
+            ephemeral=False
+        )
 
 async def setup(bot):
     # Debug message to confirm setup is running
@@ -362,7 +454,8 @@ async def setup(bot):
             'organizer_id': interaction.user.id,
             'teams': [],
             'team_list_msg_id': None,
-            'scrim_time': None
+            'scrim_time': None,
+            'organizer_channel_id': None
         }
         
         embed = discord.Embed(
@@ -581,6 +674,15 @@ async def setup(bot):
         if not event or not str(event_id).startswith(str(interaction.guild.id)):
             return await interaction.response.send_message("❌ Event not found or not in this server.", ephemeral=True)
         
+        # Delete organizer channel if exists
+        if event.get('organizer_channel_id'):
+            try:
+                channel = interaction.guild.get_channel(event['organizer_channel_id'])
+                if channel:
+                    await channel.delete(reason="Scrim event removed")
+            except:
+                pass
+        
         del scrim_events[event_id]
         await interaction.response.send_message(f"✅ Scrim event `{event_id}` removed.", ephemeral=True)
 
@@ -613,3 +715,4 @@ async def setup(bot):
 
     # Debug message when setup completes
     print("Scrim commands setup completed successfully")
+    
