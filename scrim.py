@@ -55,6 +55,10 @@ class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
         for role in guild.roles:
             if role.permissions.administrator or role.permissions.manage_guild:
                 overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+        # Allow 'Scrim mod' role to see all team channels
+        scrim_mod_role = discord.utils.get(guild.roles, name="Scrim mod")
+        if scrim_mod_role:
+            overwrites[scrim_mod_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         category = None
         # Try to find or create a category for scrims
         for cat in guild.categories:
@@ -247,4 +251,3 @@ async def setup(bot):
                 inline=False
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
