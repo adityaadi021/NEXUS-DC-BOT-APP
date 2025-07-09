@@ -1818,3 +1818,26 @@ if __name__ == "__main__":
         print("❌ Invalid token. Check your DISCORD_TOKEN")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
+
+@bot.tree.command(name="set-bot-assets", description="Set bot avatar and banner from local files (admin only)")
+async def set_bot_assets(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Only admins can set the bot assets.", ephemeral=True)
+        return
+    # Set avatar
+    try:
+        with open("bot_avatar.gif", "rb") as f:
+            avatar_bytes = f.read()
+        await interaction.client.user.edit(avatar=avatar_bytes)
+        avatar_msg = "✅ Bot avatar updated."
+    except Exception as e:
+        avatar_msg = f"❌ Failed to set avatar: {e}"
+    # Set banner (if supported)
+    try:
+        with open("bot_banner.png", "rb") as f:
+            banner_bytes = f.read()
+        await interaction.client.user.edit(banner=banner_bytes)
+        banner_msg = "✅ Bot banner updated."
+    except Exception as e:
+        banner_msg = f"⚠️ Banner not set (not supported for most bots): {e}"
+    await interaction.response.send_message(f"{avatar_msg}\n{banner_msg}", ephemeral=True)
