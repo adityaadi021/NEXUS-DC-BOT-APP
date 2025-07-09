@@ -185,6 +185,15 @@ class CancelSlotButton(Button):
             await interaction.response.send_message("❌ Team not found.", ephemeral=True)
             return
         
+        # Remove permissions first
+        scrim_channel = interaction.guild.get_channel(event['channel_id'])
+        if scrim_channel:
+            for member_id in team['member_ids']:
+                member = interaction.guild.get_member(member_id)
+                if member:
+                    await scrim_channel.set_permissions(member, overwrite=None)
+        
+        # Then remove team from event
         event['teams'].remove(team)
         await interaction.response.send_message("✅ Your team slot has been cancelled.", ephemeral=True)
         await update_scrim_team_list(event, interaction.client)
@@ -288,7 +297,6 @@ async def setup(bot):
 
     @bot.tree.command(name="add-scrim-event", description="Create a new scrim registration event")
     @app_commands.describe(
-        channel="Channel to post the registration message",
         slots="Number of teams allowed to register",
         team_size="Number of members per team (including captain)",
         event_name="Title of the scrim event",
@@ -296,7 +304,6 @@ async def setup(bot):
     )
     async def add_scrim_event(
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
         slots: int,
         team_size: Optional[int] = 4,
         event_name: Optional[str] = "Scrim Event",
@@ -384,19 +391,18 @@ async def setup(bot):
             )
 
     class StartTeamNameModalButton(View):
-    def __init__(self, event_id, member_ids):
-        super().__init__(timeout=60)
-        self.add_item(self.TeamNameButton(event_id, member_ids))
-
-    class TeamNameButton(Button):
         def __init__(self, event_id, member_ids):
-            super().__init__(label="Enter Team Name", style=discord.ButtonStyle.primary)
-            self.event_id = event_id
-            self.member_ids = member_ids
-
-        async def callback(self, interaction: discord.Interaction):
-            await interaction.response.send_modal(TeamNameModal(self.event_id, self.member_ids))
-
+            super().__init__(timeout=60)
+            self.add_item(self.TeamNameButton(event_id, member_ids))
+        
+        class TeamNameButton(Button):
+            def __init__(self, event_id, member_ids):
+                super().__init__(label="Enter Team Name", style=discord.ButtonStyle.primary)
+                self.event_id = event_id
+                self.member_ids = member_ids
+            
+            async def callback(self, interaction: discord.Interaction):
+                await interaction.response.send_modal(TeamNameModal(self.event_id, self.member_ids))
     
     @bot.event
     async def on_message(message):
@@ -507,46 +513,21 @@ async def setup(bot):
                     await message.delete()
                 except discord.NotFound:
                     print("Message already deleted")
-                    pass
                 except Exception as e:
                     print(f"Error deleting message: {e}")
                 
-                # Send team name modal
+                # Send team name modal via button
                 try:
-                    modal = TeamNameModal(event_id, [str(m.id) for m in mentions])
-                    
-
-# In on_message when all checks pass:
-try:
-    await message.delete()
-except Exception as e:
-    print(f"Message deletion failed: {e}")
-
-try:
-    view = StartTeamNameModalButton(event_id, [str(m.id) for m in mentions])
-    await message.channel.send(
-        f"{message.author.mention}, click the button below to submit your team name:",
-        view=view,
-        delete_after=60
-    )
-except Exception as e:
-    print(f"Error showing modal via button: {e}")
-    await message.channel.send(
-        f"{message.author.mention}, an error occurred during registration. Please try again later.",
-        delete_after=15
-    )
-
-                    
-                except discord.Forbidden:
-                    print("Couldn't send DM to user")
+                    view = StartTeamNameModalButton(event_id, [str(m.id) for m in mentions])
                     await message.channel.send(
-                        f"{message.author.mention}, I couldn't send you a DM. Please enable DMs to register.",
-                        delete_after=15
+                        f"{message.author.mention}, click the button below to submit your team name:",
+                        view=view,
+                        delete_after=60
                     )
                 except Exception as e:
-                    print(f"Error sending modal: {e}")
+                    print(f"Error showing modal via button: {e}")
                     await message.channel.send(
-                        f"{message.author.mention}, an error occurred during registration. Please try again.",
+                        f"{message.author.mention}, an error occurred during registration. Please try again later.",
                         delete_after=15
                     )
                 
