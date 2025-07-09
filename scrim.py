@@ -499,7 +499,40 @@ async def setup(bot):
                 # Send team name modal
                 try:
                     modal = TeamNameModal(event_id, [str(m.id) for m in mentions])
-                    await message.author.send("Please enter your team name:", view=modal)
+                    class StartTeamNameModalButton(View):
+    def __init__(self, event_id, member_ids):
+        super().__init__(timeout=60)
+        self.add_item(self.TeamNameButton(event_id, member_ids))
+
+    class TeamNameButton(Button):
+        def __init__(self, event_id, member_ids):
+            super().__init__(label="Enter Team Name", style=discord.ButtonStyle.primary)
+            self.event_id = event_id
+            self.member_ids = member_ids
+
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.send_modal(TeamNameModal(self.event_id, self.member_ids))
+
+# In on_message when all checks pass:
+try:
+    await message.delete()
+except Exception as e:
+    print(f"Message deletion failed: {e}")
+
+try:
+    view = StartTeamNameModalButton(event_id, [str(m.id) for m in mentions])
+    await message.channel.send(
+        f"{message.author.mention}, click the button below to submit your team name:",
+        view=view,
+        delete_after=60
+    )
+except Exception as e:
+    print(f"Error showing modal via button: {e}")
+    await message.channel.send(
+        f"{message.author.mention}, an error occurred during registration. Please try again later.",
+        delete_after=15
+    )
+
                     await message.channel.send(
                         f"{message.author.mention}, please check your DMs to complete registration.",
                         delete_after=15
