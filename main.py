@@ -106,6 +106,11 @@ async def on_ready():
         scopes=("bot", "applications.commands")
     )
     print(f"\n🔗 Add bot to other servers using this link (MUST include 'applications.commands' scope):\n{invite_url}\n")
+
+    await bot.change_presence(
+        status=discord.Status.online,  # Can be online, idle, dnd, invisible
+        activity=discord.Game('Watching')  # You can use Game, Streaming, Listening, Watching
+    )
     
     # Auto-set bot assets
     await set_bot_assets_on_startup()
