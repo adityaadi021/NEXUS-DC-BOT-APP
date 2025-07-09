@@ -112,7 +112,8 @@ async def notify_scrim_organizer(event, bot):
     await user.send(f"All slots for your scrim event '{event['event_name']}' are filled! Please set the scrim time:")
     await user.send_modal(ScrimTimeModal())
 
-def setup_scrim_commands(bot):
+# Register all scrim commands in a single async setup function
+async def setup(bot):
     @bot.tree.command(name="add-scrim-event", description="Create a new scrim registration event")
     @app_commands.describe(
         channel="Channel to post the registration message",
@@ -158,15 +159,3 @@ def setup_scrim_commands(bot):
         view = ScrimRegisterView(event_id)
         await channel.send(embed=embed, view=view)
         await interaction.response.send_message(f"✅ Scrim registration started in {channel.mention}", ephemeral=True)
-
-import discord
-from discord import app_commands
-
-# Example scrim command (replace or expand as needed)
-@app_commands.command(name="register-scrim", description="Register for a scrim event")
-async def register_scrim(interaction: discord.Interaction):
-    await interaction.response.send_message("You have registered for the scrim!", ephemeral=True)
-
-async def setup(bot):
-    # Register scrim commands with the bot
-    bot.tree.add_command(register_scrim)
