@@ -65,7 +65,7 @@ SOCIAL_FILE = "social_trackers.json"
 social_trackers = {}
 
 # Add this near your other initialization code (around line 20)
-AVATAR_FILE = "bot_avatar.png"  # or .gif for animated
+AVATAR_FILE = "bot_avatar.gif"  # or .gif for animated
 BANNER_FILE = "bot_banner.png"
 
 async def set_bot_assets_on_startup():
