@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Modal, TextInput, View, Button
+from discord.ui import Modal, TextInput, View, Button, Select
 from datetime import datetime
 from typing import Optional
 import asyncio
@@ -10,14 +10,29 @@ import asyncio
 scrim_events = {}
 
 class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
-    def __init__(self, event_id, team_size):
+    def __init__(self, event_id, team_size, guild):
         super().__init__()
         self.event_id = event_id
         self.team_size = team_size
+        self.guild = guild
         self.team_name = TextInput(label="Team Name", required=True, max_length=32)
-        self.members = TextInput(label=f"Team Members (mention {team_size-1} others)", required=True, placeholder="@member1 @member2 ...")
         self.add_item(self.team_name)
-        self.add_item(self.members)
+        # Dropdowns for member selection (excluding captain)
+        self.member_selects = []
+        member_options = [
+            discord.SelectOption(label=member.display_name, value=str(member.id))
+            for member in guild.members if not member.bot
+        ]
+        for i in range(team_size - 1):
+            select = Select(
+                placeholder=f"Select member {i+1}",
+                min_values=1,
+                max_values=1,
+                options=member_options,
+                custom_id=f"member_select_{i}"
+            )
+            self.member_selects.append(select)
+            self.add_item(select)
 
     async def on_submit(self, interaction: discord.Interaction):
         event = scrim_events.get(self.event_id)
@@ -28,16 +43,19 @@ class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
         if any(t['team_name'].lower() == self.team_name.value.lower() for t in event['teams']):
             await interaction.response.send_message("❌ Team name already registered.", ephemeral=True)
             return
-        # Validate member mentions
-        mentions = [m for m in self.members.value.split() if m.startswith('<@')]
-        if len(mentions) != self.team_size - 1:
-            await interaction.response.send_message(f"❌ Please mention exactly {self.team_size-1} team members.", ephemeral=True)
+        # Get selected member IDs
+        member_ids = [interaction.user.id]
+        for select in self.member_selects:
+            member_ids.append(int(select.values[0]))
+        # Ensure no duplicates
+        if len(set(member_ids)) != self.team_size:
+            await interaction.response.send_message("❌ Duplicate members selected.", ephemeral=True)
             return
         # Register team
         team = {
             'team_name': self.team_name.value,
             'captain_id': interaction.user.id,
-            'members': [interaction.user.mention] + mentions
+            'members': [self.guild.get_member(mid).mention for mid in member_ids]
         }
         event['teams'].append(team)
         # --- Create private channel for the team ---
@@ -45,8 +63,6 @@ class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
         }
-        # Add all team members
-        member_ids = [interaction.user.id] + [int(m[2:-1]) for m in mentions if m.startswith('<@') and m[2:-1].isdigit()]
         for member_id in member_ids:
             member = guild.get_member(member_id)
             if member:
@@ -88,9 +104,10 @@ class ScrimRegistrationModal(Modal, title="Scrim Team Registration"):
             await notify_scrim_organizer(event, interaction.client)
 
 class ScrimRegisterButton(Button):
-    def __init__(self, event_id):
+    def __init__(self, event_id, team_size):
         super().__init__(label="Register Team", style=discord.ButtonStyle.primary, custom_id=f"scrim_register_{event_id}")
         self.event_id = event_id
+        self.team_size = team_size
 
     async def callback(self, interaction: discord.Interaction):
         event = scrim_events.get(self.event_id)
@@ -102,12 +119,12 @@ class ScrimRegisterButton(Button):
             if interaction.user.id == t['captain_id'] or interaction.user.mention in t['members']:
                 await interaction.response.send_message("❌ You are already registered in a team for this event.", ephemeral=True)
                 return
-        await interaction.response.send_modal(ScrimRegistrationModal(self.event_id, event['team_size']))
+        await interaction.response.send_modal(ScrimRegistrationModal(self.event_id, self.team_size, interaction.guild))
 
 class ScrimRegisterView(View):
-    def __init__(self, event_id):
+    def __init__(self, event_id, team_size):
         super().__init__(timeout=None)
-        self.add_item(ScrimRegisterButton(event_id))
+        self.add_item(ScrimRegisterButton(event_id, team_size))
 
 async def update_scrim_team_list(event, bot):
     channel = bot.get_channel(event['channel_id'])
@@ -163,14 +180,16 @@ async def setup(bot):
         channel="Channel to post the registration message",
         slots="Number of teams allowed to register",
         team_size="Number of members per team (including captain)",
-        event_name="Name of the scrim event"
+        event_name="Title of the scrim event",
+        description="Description for the scrim event"
     )
     async def add_scrim_event(
         interaction: discord.Interaction,
         channel: discord.TextChannel,
         slots: int,
         team_size: Optional[int] = 4,
-        event_name: Optional[str] = "Scrim Event"
+        event_name: Optional[str] = "Scrim Event",
+        description: Optional[str] = "Register your team for the scrim!"
     ):
         # Allow ADMINISTRATORs or flasherx7 to use this command
         if not (interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator or is_flasherx7(interaction)):
@@ -181,6 +200,7 @@ async def setup(bot):
         scrim_events[event_id] = {
             'event_id': event_id,
             'event_name': event_name,
+            'description': description,
             'channel_id': channel.id,
             'slots': slots,
             'team_size': team_size,
@@ -192,16 +212,16 @@ async def setup(bot):
         embed = discord.Embed(
             title=f"🏆 {event_name} Registration",
             description=(
-                f"Slots: {slots}\nTeam size: {team_size}\n\n"
+                f"{description}\n\nSlots: {slots}\nTeam size: {team_size}\n\n"
                 "Click the button below to register your team!\n"
-                "- You will be asked for your team name and to mention your teammates.\n"
+                "- You will be asked for your team name and to select your teammates.\n"
                 "- Each user can only register for one team.\n"
                 "- When all slots are filled, the organizer will be notified to set the scrim time."
             ),
             color=discord.Color.gold(),
             timestamp=datetime.utcnow()
         )
-        view = ScrimRegisterView(event_id)
+        view = ScrimRegisterView(event_id, team_size)
         await channel.send(embed=embed, view=view)
         await interaction.response.send_message(f"✅ Scrim registration started in {channel.mention}", ephemeral=True)
 
