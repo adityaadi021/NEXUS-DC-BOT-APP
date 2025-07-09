@@ -1819,25 +1819,49 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
 
-@bot.tree.command(name="set-bot-assets", description="Set bot avatar and banner from local files (admin only)")
+@bot.tree.command(name="set-bot-assets", description="Set bot avatar and banner from local files (Bot Owner only)")
 async def set_bot_assets(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Only admins can set the bot assets.", ephemeral=True)
-        return
-    # Set avatar
+    """Set bot's global avatar and banner (Bot Owner only)"""
+    # Get application info to verify owner
+    app_info = await bot.application_info()
+    if interaction.user.id != app_info.owner.id:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="Only the bot owner can change bot assets",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    
+    results = []
+    
+    # Try to set avatar (GIF supported)
     try:
         with open("bot_avatar.gif", "rb") as f:
             avatar_bytes = f.read()
-        await interaction.client.user.edit(avatar=avatar_bytes)
-        avatar_msg = "✅ Bot avatar updated."
-    except Exception as e:
-        avatar_msg = f"❌ Failed to set avatar: {e}"
-    # Set banner (if supported)
+        await bot.user.edit(avatar=avatar_bytes)
+        results.append("✅ Bot avatar updated (GIF)")
+    except FileNotFoundError:
+        results.append("❌ Avatar file not found: bot_avatar.gif")
+    except discord.HTTPException as e:
+        results.append(f"❌ Failed to set avatar: {e}")
+    
+    # Try to set banner
     try:
         with open("bot_banner.png", "rb") as f:
             banner_bytes = f.read()
-        await interaction.client.user.edit(banner=banner_bytes)
-        banner_msg = "✅ Bot banner updated."
-    except Exception as e:
-        banner_msg = f"⚠️ Banner not set (not supported for most bots): {e}"
-    await interaction.response.send_message(f"{avatar_msg}\n{banner_msg}", ephemeral=True)
+        await bot.user.edit(banner=banner_bytes)
+        results.append("✅ Bot banner updated")
+    except FileNotFoundError:
+        results.append("❌ Banner file not found: bot_banner.png")
+    except discord.HTTPException as e:
+        results.append(f"⚠️ Banner not set (may require verification): {e}")
+    
+    # Send results
+    embed = create_embed(
+        title="🔄 Bot Assets Update",
+        description="\n".join(results),
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
