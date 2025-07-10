@@ -1251,76 +1251,50 @@ async def set_welcome(interaction: discord.Interaction,
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    """Send welcome messages when a member joins"""
     guild_id = str(member.guild.id)
-
+    
     if guild_id not in guild_configs:
         return
 
+    # Welcome Channel Message
     welcome_channel_id = guild_configs[guild_id].get("welcome_channel")
-
-    # Send channel welcome
     if welcome_channel_id:
         try:
             channel = member.guild.get_channel(int(welcome_channel_id))
             if channel:
-                # Custom Welcome Image Generation
-                avatar_asset = member.display_avatar.replace(format="png", size=256)
-                avatar_bytes = await avatar_asset.read()
-                avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-
-                base = Image.new("RGBA", (400, 500), (255, 255, 255, 0))
-                avatar_size = 256
-                avatar_pos = ((400 - avatar_size) // 2, 20)
-                base.paste(avatar_img.resize((avatar_size, avatar_size)), avatar_pos, avatar_img.resize((avatar_size, avatar_size)))
-
-                draw = ImageDraw.Draw(base)
-                try:
-                    font_username = ImageFont.truetype("arial.ttf", 36)
-                    font_member = ImageFont.truetype("arial.ttf", 28)
-                except:
-                    font_username = ImageFont.load_default()
-                    font_member = ImageFont.load_default()
-
-                username_text = str(member)
-                text_w, text_h = draw.textsize(username_text, font=font_username)
-                text_x = (400 - text_w) // 2
-                text_y = avatar_pos[1] + avatar_size + 20
-                draw.text((text_x, text_y), username_text, font=font_username, fill=(30, 30, 30, 255))
-
-                member_no = sum(1 for m in member.guild.members if not m.bot)
-                member_text = f"you are our {member_no} member."
-                mem_w, mem_h = draw.textsize(member_text, font=font_member)
-                mem_x = (400 - mem_w) // 2
-                mem_y = text_y + text_h + 10
-                draw.text((mem_x, mem_y), member_text, font=font_member, fill=(120, 0, 0, 255))
-
-                img_bytes = io.BytesIO()
-                base.save(img_bytes, format="PNG")
-                img_bytes.seek(0)
-
-                file = discord.File(img_bytes, filename="welcome.png")
-
-                welcome_text = (
-                    "First click on Nexus Esports above\n"
-                    "and select 'Show All Channels' so that\n"
-                    "all channels become visible to you.\n\n"
-                    "💕 Welcome to Nexus Esports 💕"
-                )
+                # Try to generate image
+                img_bytes = await generate_welcome_image(member)
                 
-                embed = discord.Embed(
-                    description=(
+                if img_bytes:
+                    file = discord.File(img_bytes, filename="welcome.png")
+                    welcome_text = (
                         f"Bro {member.mention},\n\n"
-                        f"```\n{welcome_text}\n```"
-                    ),
-                    color=discord.Color(0x3e0000)
-                )
-                embed.set_image(url="attachment://welcome.png")
-                embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
-                
-                await channel.send(embed=embed, file=file)
+                        "```\n"
+                        "First click on Nexus Esports above\n"
+                        "and select 'Show All Channels' so that\n"
+                        "all channels become visible to you.\n\n"
+                        "💕 Welcome to Nexus Esports 💕\n"
+                        "```"
+                    )
+                    embed = discord.Embed(description=welcome_text, color=discord.Color(0x3e0000))
+                    embed.set_image(url="attachment://welcome.png")
+                    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
+                    await channel.send(embed=embed, file=file)
+                else:
+                    # Fallback to simple welcome if image fails
+                    welcome_text = (
+                        f"💕 Welcome {member.mention} to Nexus Esports! 💕\n\n"
+                        "First click on Nexus Esports above\n"
+                        "and select 'Show All Channels'"
+                    )
+                    await channel.send(welcome_text)
+                    
         except Exception as e:
-            print(f"⚠️ Error sending channel welcome: {e}")
+            print(f"Error sending channel welcome: {e}")
+            try:
+                await channel.send(f"Welcome {member.mention} to the server!")
+            except:
+                pass
 
     # Send DM welcome
     try:
