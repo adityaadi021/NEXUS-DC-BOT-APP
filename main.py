@@ -608,7 +608,12 @@ async def on_message(message):
                 if line.lower().startswith("team name:"):
                     team_name = line.split(":", 1)[1].strip()
                 elif line.lower().startswith("members:"):
-                    members = [m for m in message.mentions]
+                    # Only extract mentions from this line
+                    member_ids = [int(m_id[3:-1]) for m_id in line.split() if m_id.startswith("<@") and m_id.endswith(">")]
+                    for m_id in member_ids:
+                        member = message.guild.get_member(m_id)
+                        if member:
+                            members.append(member)
             # Fallback: if not found, try to parse mentions in message
             if not members:
                 members = [m for m in message.mentions]
