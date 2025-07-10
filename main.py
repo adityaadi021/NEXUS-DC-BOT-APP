@@ -77,7 +77,7 @@ async def set_bot_assets_on_startup():
     try:
         # Set Avatar (supports PNG/JPEG/GIF)
         if os.path.exists(AVATAR_FILE):
-            with open(AVAR_FILE, "rb") as f:
+            with open(AVATAR_FILE, "rb") as f:  # <-- fixed typo here
                 await bot.user.edit(avatar=f.read())
             print("✅ Bot avatar set automatically!")
         
@@ -2066,3 +2066,7 @@ async def collect_teams(
         ),
         ephemeral=True
     )
+
+if __name__ == "__main__":
+    Thread(target=run_flask).start()
+    bot.run(token)
