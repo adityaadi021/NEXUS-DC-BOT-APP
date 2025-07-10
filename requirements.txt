@@ -4,3 +4,4 @@ beautifulsoup4
 google-api-python-client
 flask
 python-dateutil
+Pillow
