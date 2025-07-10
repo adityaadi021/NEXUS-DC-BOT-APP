@@ -77,7 +77,7 @@ async def set_bot_assets_on_startup():
     try:
         # Set Avatar (supports PNG/JPEG/GIF)
         if os.path.exists(AVATAR_FILE):
-            with open(AVATAR_FILE, "rb") as f:  # <-- Fix typo here
+            with open(AVAR_FILE, "rb") as f:
                 await bot.user.edit(avatar=f.read())
             print("✅ Bot avatar set automatically!")
         
