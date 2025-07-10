@@ -15,6 +15,10 @@ from flask import Flask
 from threading import Thread
 import scrim  # Ensure scrim is imported
 
+# Add PIL import for image generation
+from PIL import Image, ImageDraw, ImageFont
+import io
+
 
 print("🚀 Bot is starting...")
 
@@ -591,6 +595,65 @@ async def on_message(message):
             # Can't send message back (user blocked bot or closed DMs)
             pass
     
+    # --- Team Registration Handler ---
+    if message.guild and not message.author.bot:
+        guild_id = str(message.guild.id)
+        session = active_team_collections.get(guild_id)
+        if session and message.channel.id == session["post_channel_id"]:
+            # Parse team registration
+            lines = message.content.splitlines()
+            team_name = None
+            members = []
+            for line in lines:
+                if line.lower().startswith("team name:"):
+                    team_name = line.split(":", 1)[1].strip()
+                elif line.lower().startswith("members:"):
+                    members = [m for m in message.mentions]
+            # Fallback: if not found, try to parse mentions in message
+            if not members:
+                members = [m for m in message.mentions]
+            # Add author if not mentioned
+            if message.author not in members:
+                members.insert(0, message.author)
+            # Remove duplicates
+            members = list(dict.fromkeys(members))
+            # Validate
+            if not team_name or len(members) != session["team_size"]:
+                try:
+                    await message.reply(
+                        f"❌ Invalid registration format or wrong number of members ({len(members)}/{session['team_size']}).\n"
+                        f"Please follow the instructions in the registration message."
+                    )
+                except Exception:
+                    pass
+                return
+            # Post in registered_channel
+            registered_channel = message.guild.get_channel(session["registered_channel_id"])
+            if registered_channel:
+                member_mentions = " ".join(m.mention for m in members)
+                embed = discord.Embed(
+                    title=f"✅ Team Registered: {team_name}",
+                    description=f"**Members:** {member_mentions}",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.set_footer(text=f"Registered by {message.author.display_name}")
+                await registered_channel.send(embed=embed)
+            # Assign role
+            team_role = message.guild.get_role(session["team_role_id"])
+            if team_role:
+                for m in members:
+                    try:
+                        await m.add_roles(team_role, reason=f"Team registration for {session['tournament_name']}")
+                    except Exception:
+                        pass
+            # Confirm to user
+            try:
+                await message.reply(f"✅ Team **{team_name}** registered and role assigned!")
+            except Exception:
+                pass
+            return  # Do not process as command
+
     # Process commands (important for command functionality)
     await bot.process_commands(message)
 
@@ -1325,6 +1388,51 @@ async def on_member_join(member: discord.Member):
         try:
             channel = member.guild.get_channel(welcome_channel_id)
             if channel:
+                # --- Custom Welcome Image Generation ---
+                # Get member's avatar (static, 256x256)
+                avatar_asset = member.display_avatar.replace(format="png", size=256)
+                avatar_bytes = await avatar_asset.read()
+                avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+
+                # Create base image (width 400, height 500)
+                base = Image.new("RGBA", (400, 500), (255, 255, 255, 0))
+                # Paste avatar in center top
+                avatar_size = 256
+                avatar_pos = ((400 - avatar_size) // 2, 20)
+                base.paste(avatar_img.resize((avatar_size, avatar_size)), avatar_pos, avatar_img.resize((avatar_size, avatar_size)))
+
+                draw = ImageDraw.Draw(base)
+
+                # Load a font (fallback to default if not found)
+                try:
+                    font_username = ImageFont.truetype("arial.ttf", 36)
+                    font_member = ImageFont.truetype("arial.ttf", 28)
+                except:
+                    font_username = ImageFont.load_default()
+                    font_member = ImageFont.load_default()
+
+                # Username text
+                username_text = str(member)
+                text_w, text_h = draw.textsize(username_text, font=font_username)
+                text_x = (400 - text_w) // 2
+                text_y = avatar_pos[1] + avatar_size + 20
+                draw.text((text_x, text_y), username_text, font=font_username, fill=(30, 30, 30, 255))
+
+                # Member number
+                member_no = sum(1 for m in member.guild.members if not m.bot)
+                member_text = f"you are our {member_no} member."
+                mem_w, mem_h = draw.textsize(member_text, font=font_member)
+                mem_x = (400 - mem_w) // 2
+                mem_y = text_y + text_h + 10
+                draw.text((mem_x, mem_y), member_text, font=font_member, fill=(120, 0, 0, 255))
+
+                # Save to BytesIO
+                img_bytes = io.BytesIO()
+                base.save(img_bytes, format="PNG")
+                img_bytes.seek(0)
+
+                file = discord.File(img_bytes, filename="welcome.png")
+
                 # Create embed with proper formatting
                 welcome_text = (
                     "First click on Nexus Esports above\n"
@@ -1340,10 +1448,11 @@ async def on_member_join(member: discord.Member):
                     ),
                     color=discord.Color(0x3e0000)
                 )
-                # Set GIF
-                embed.set_image(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
+                # Set GIF as secondary image (if you want both, use embed.set_thumbnail for GIF)
+                embed.set_image(url="attachment://welcome.png")
+                embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
                 
-                await channel.send(embed=embed)
+                await channel.send(embed=embed, file=file)
         except Exception as e:
             print(f"⚠️ Error sending channel welcome: {e}")
     
@@ -1863,27 +1972,92 @@ async def on_guild_remove(guild):
         del social_trackers[guild_id]
         save_social_trackers()
 
-async def main():
-    # Start Flask server in a separate thread
-    Thread(target=run_flask, daemon=True).start()
-    # Import and setup scrim commands (only once)
-    import scrim
-    await scrim.setup(bot)
-    # Start the bot
-    await bot.start(token)
+# Store active team collection sessions: {guild_id: {...}}
+active_team_collections = {}
 
-if __name__ == "__main__":
-    import asyncio
-    try:
-        asyncio.run(main())
-    except discord.PrivilegedIntentsRequired:
-        print("\n❌ PRIVILEGED INTENTS REQUIRED ❌")
-        print("1. Go to https://discord.com/developers/applications")
-        print("2. Select your application")
-        print("3. Navigate to Bot > Privileged Gateway Intents")
-        print("4. ENABLE 'MESSAGE CONTENT INTENT' and 'SERVER MEMBERS INTENT'")
-        print("5. Save changes and restart your bot\n")
-    except discord.LoginFailure:
-        print("❌ Invalid token. Check your DISCORD_TOKEN")
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+@bot.tree.command(name="collect-teams", description="Start team registration for a tournament")
+@app_commands.describe(
+    team_size="Number of members per team",
+    tournament_name="Name of the tournament",
+    post_channel="Channel to post the registration message",
+    registered_channel="Channel to post registered teams",
+    team_role="Role to assign to team members"
+)
+async def collect_teams(
+    interaction: discord.Interaction,
+    team_size: int,
+    tournament_name: str,
+    post_channel: discord.TextChannel,
+    registered_channel: discord.TextChannel,
+    team_role: discord.Role
+):
+    """Start a team registration session for a tournament."""
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Server' permission to use this command.",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+
+    guild_id = str(interaction.guild.id)
+    # Save session info
+    active_team_collections[guild_id] = {
+        "team_size": team_size,
+        "tournament_name": tournament_name,
+        "post_channel_id": post_channel.id,
+        "registered_channel_id": registered_channel.id,
+        "team_role_id": team_role.id,
+        "creator_id": interaction.user.id
+    }
+
+    # Registration instructions (guide message)
+    guide_text = (
+        f"**How to Register Your Team for `{tournament_name}`**\n\n"
+        f"**Step 1:** Type your team info in this channel as a message.\n"
+        f"**Step 2:** Use the following format:\n"
+        f"```Team Name: <your team name>\nMembers: @member1 @member2 ... (mention {team_size} members including yourself)```\n"
+        f"**Example:**\n"
+        f"```Team Name: Nexus Legends\nMembers: @user1 @user2 @user3```\n"
+        f"• Make sure to tag all your team members (including yourself).\n"
+        f"• Each team must have exactly {team_size} members.\n"
+        f"• After you send your message, the bot will confirm and post your team in {registered_channel.mention}."
+    )
+    guide_embed = discord.Embed(
+        title=f"📋 Team Registration Guide",
+        description=guide_text,
+        color=discord.Color.blue()
+    )
+    await post_channel.send(embed=guide_embed)
+
+    # Registration instructions (short summary)
+    instructions = (
+        f"**Team Registration for `{tournament_name}` is now OPEN!**\n\n"
+        f"To register your team, reply in this channel with:\n"
+        f"`Team Name: <your team name>`\n"
+        f"`Members: @member1 @member2 ... (mention {team_size} members including yourself)`\n\n"
+        f"Example:\n"
+        f"Team Name: Nexus Legends\n"
+        f"Members: @user1 @user2 @user3\n\n"
+        f"**Each team must have exactly {team_size} members.**\n"
+        f"Once you submit, your team will be registered and posted in <#{registered_channel.id}>."
+    )
+    embed = discord.Embed(
+        title=f"🏆 {tournament_name} Team Registration",
+        description=instructions,
+        color=discord.Color.gold(),
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text="Nexus Esports | Team Registration")
+    await post_channel.send(embed=embed)
+    await interaction.response.send_message(
+        embed=create_embed(
+            title="✅ Registration Started",
+            description=f"Registration message posted in {post_channel.mention}. Teams will be posted in {registered_channel.mention}.",
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
