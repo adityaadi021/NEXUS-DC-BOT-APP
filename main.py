@@ -77,7 +77,7 @@ async def set_bot_assets_on_startup():
     try:
         # Set Avatar (supports PNG/JPEG/GIF)
         if os.path.exists(AVATAR_FILE):
-            with open(AVAR_FILE, "rb") as f:
+            with open(AVATAR_FILE, "rb") as f:  # <-- Fix typo here
                 await bot.user.edit(avatar=f.read())
             print("✅ Bot avatar set automatically!")
         
@@ -1572,27 +1572,27 @@ async def on_member_join(member: discord.Member):
     except Exception as e:
         print(f"⚠️ Error sending welcome DM: {e}")
 
-@bot.tree.command(name="ping", description="Test bot responsiveness")
-async def ping(interaction: discord.Interaction):
-    """Simple ping command with latency check"""
-    latency = round(bot.latency * 1000)
-    embed = create_embed(
-        title="🏓 Pong!",
-        description=f"Bot latency: {latency}ms",
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
+# --- SCRIM COMMANDS LOADING ---
+import sys
 
-@bot.tree.command(name="my-permissions", description="Check your announcement permissions")
-async def check_perms(interaction: discord.Interaction):
-    """Command for users to check why they can't use announcement commands"""
-    has_perm = has_announcement_permission(interaction)
-    perm_status = "✅ You HAVE announcement permissions!" if has_perm else "❌ You DON'T HAVE announcement permissions"
-    
-    # Get user's roles
-    roles = ", ".join([role.name for role in interaction.user.roles]) or "No roles"
-    
-    # Get current guild's announcement role
+async def main():
+    try:
+        await bot.load_extension("scrim")
+        print("✅ Scrim commands loaded.")
+    except Exception as e:
+        print(f"⚠️ Could not load scrim extension: {e}")
+    # Optionally, run Flask in a thread if needed
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    await bot.start(token)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped by user.")
+        sys.exit(0)
     guild_id = str(interaction.guild.id)
     announce_role_id = guild_configs.get(guild_id, {}).get("announcement_role") if interaction.guild else None
     
@@ -3337,4 +3337,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Bot stopped by user.")
         sys.exit(0)
-
