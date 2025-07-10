@@ -77,7 +77,7 @@ async def set_bot_assets_on_startup():
     try:
         # Set Avatar (supports PNG/JPEG/GIF)
         if os.path.exists(AVATAR_FILE):
-            with open(AVATAR_FILE, "rb") as f:  # <-- fixed typo here
+            with open(AVAR_FILE, "rb") as f:
                 await bot.user.edit(avatar=f.read())
             print("✅ Bot avatar set automatically!")
         
@@ -137,6 +137,15 @@ async def on_ready():
         print("✅ Started tournament event schedule task")
 
         
+# --- SCRIM COMMANDS LOADING ---
+# Add this after bot definition and before on_ready
+# If scrim.py is a cog, use:
+try:
+    bot.load_extension("scrim")
+    print("✅ Scrim commands loaded.")
+except Exception as e:
+    print(f"⚠️ Could not load scrim extension: {e}")
+
 # Load configs on startup
 def load_config():
     global guild_configs
@@ -308,12 +317,13 @@ async def force_sync(interaction: discord.Interaction):
         await interaction.response.send_message(f"❌ Sync failed: {e}", ephemeral=True)
 
 # Tournament Event Schedule
+# Remove the duplicate on_ready event (keep only one, merge logic)
+# Keep only ONE on_ready event, merge asset setup and background tasks
 @bot.event
 async def on_ready():
     global commands_synced
     print(f"✅ Bot ready! Logged in as {bot.user}")
-    
-    # Print invite link with proper scopes
+
     invite_url = discord.utils.oauth_url(
         bot.user.id,
         permissions=discord.Permissions(
@@ -328,7 +338,15 @@ async def on_ready():
         scopes=("bot", "applications.commands")
     )
     print(f"\n🔗 Add bot to other servers using this link (MUST include 'applications.commands' scope):\n{invite_url}\n")
-    
+
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Game('Watching')
+    )
+
+    # Auto-set bot assets
+    await set_bot_assets_on_startup()
+
     if not commands_synced:
         try:
             synced = await bot.tree.sync()
@@ -336,8 +354,8 @@ async def on_ready():
             print(f"✅ Synced {len(synced)} command(s) globally")
         except Exception as e:
             print(f"❌ Command sync failed: {e}")
-    
-    # Start social task
+
+    # Start background tasks
     if not hasattr(bot, 'social_task'):
         bot.social_task = bot.loop.create_task(social_update_task())
         print("✅ Started social media tracking task")
@@ -345,6 +363,7 @@ async def on_ready():
     if not hasattr(bot, 'event_task'):
         bot.event_task = bot.loop.create_task(event_schedule_notifier())
         print("✅ Started tournament event schedule task")
+
 
 # Load configs on startup
 load_config()
@@ -600,6 +619,15 @@ async def on_message(message):
         guild_id = str(message.guild.id)
         session = active_team_collections.get(guild_id)
         if session and message.channel.id == session["post_channel_id"]:
+            # Prevent registration if max slots reached
+            if len(session.get("registered_teams", [])) >= session.get("max_slots", 0):
+                try:
+                    await message.reply(
+                        f"❌ Registration closed. Maximum of {session['max_slots']} teams already registered."
+                    )
+                except Exception:
+                    pass
+                return
             # Parse team registration
             lines = message.content.splitlines()
             team_name = None
@@ -608,19 +636,15 @@ async def on_message(message):
                 if line.lower().startswith("team name:"):
                     team_name = line.split(":", 1)[1].strip()
                 elif line.lower().startswith("members:"):
-                    # Only extract mentions from this line
                     member_ids = [int(m_id[3:-1]) for m_id in line.split() if m_id.startswith("<@") and m_id.endswith(">")]
                     for m_id in member_ids:
                         member = message.guild.get_member(m_id)
                         if member:
                             members.append(member)
-            # Fallback: if not found, try to parse mentions in message
             if not members:
                 members = [m for m in message.mentions]
-            # Add author if not mentioned
             if message.author not in members:
                 members.insert(0, message.author)
-            # Remove duplicates
             members = list(dict.fromkeys(members))
             # Validate
             if not team_name or len(members) != session["team_size"]:
@@ -628,6 +652,30 @@ async def on_message(message):
                     await message.reply(
                         f"❌ Invalid registration format or wrong number of members ({len(members)}/{session['team_size']}).\n"
                         f"Please follow the instructions in the registration message."
+                    )
+                except Exception:
+                    pass
+                return
+            # Prevent duplicate team names
+            if any(t["team_name"].lower() == team_name.lower() for t in session.get("registered_teams", [])):
+                try:
+                    await message.reply(
+                        f"❌ Team name `{team_name}` is already registered. Please choose a different name."
+                    )
+                except Exception:
+                    pass
+                return
+            # Prevent member from registering in multiple teams or multiple times
+            already_registered_ids = set()
+            for t in session.get("registered_teams", []):
+                already_registered_ids.update(t["members"])
+            duplicate_members = [m for m in members if m.id in already_registered_ids]
+            if duplicate_members:
+                try:
+                    await message.reply(
+                        f"❌ The following member(s) are already registered in another team: " +
+                        ", ".join(m.mention for m in duplicate_members) +
+                        "\nNo member can register in more than one team."
                     )
                 except Exception:
                     pass
@@ -652,6 +700,11 @@ async def on_message(message):
                         await m.add_roles(team_role, reason=f"Team registration for {session['tournament_name']}")
                     except Exception:
                         pass
+            # Save registered team
+            session.setdefault("registered_teams", []).append({
+                "team_name": team_name,
+                "members": [m.id for m in members]
+            })
             # Confirm to user
             try:
                 await message.reply(f"✅ Team **{team_name}** registered and role assigned!")
@@ -1381,17 +1434,18 @@ async def set_welcome(interaction: discord.Interaction,
 async def on_member_join(member: discord.Member):
     """Send welcome messages when a member joins"""
     guild_id = str(member.guild.id)
-    
+
     # Check if welcome is configured
     if guild_id not in guild_configs:
         return
-    
+
     welcome_channel_id = guild_configs[guild_id].get("welcome_channel")
-    
+
     # Send channel welcome
     if welcome_channel_id:
         try:
-            channel = member.guild.get_channel(welcome_channel_id)
+            # Ensure channel ID is int
+            channel = member.guild.get_channel(int(welcome_channel_id))
             if channel:
                 # --- Custom Welcome Image Generation ---
                 # Get member's avatar (static, 256x256)
@@ -1460,7 +1514,7 @@ async def on_member_join(member: discord.Member):
                 await channel.send(embed=embed, file=file)
         except Exception as e:
             print(f"⚠️ Error sending channel welcome: {e}")
-    
+
     # Send DM welcome
     try:
         welcome_dm = guild_configs[guild_id].get("welcome_dm")
@@ -1986,7 +2040,8 @@ active_team_collections = {}
     tournament_name="Name of the tournament",
     post_channel="Channel to post the registration message",
     registered_channel="Channel to post registered teams",
-    team_role="Role to assign to team members"
+    team_role="Role to assign to team members",
+    max_slots="Maximum number of teams allowed to register"
 )
 async def collect_teams(
     interaction: discord.Interaction,
@@ -1994,7 +2049,8 @@ async def collect_teams(
     tournament_name: str,
     post_channel: discord.TextChannel,
     registered_channel: discord.TextChannel,
-    team_role: discord.Role
+    team_role: discord.Role,
+    max_slots: int
 ):
     """Start a team registration session for a tournament."""
     if not interaction.user.guild_permissions.manage_guild:
@@ -2016,31 +2072,14 @@ async def collect_teams(
         "post_channel_id": post_channel.id,
         "registered_channel_id": registered_channel.id,
         "team_role_id": team_role.id,
-        "creator_id": interaction.user.id
+        "creator_id": interaction.user.id,
+        "max_slots": max_slots,
+        "registered_teams": []
     }
-
-    # Registration instructions (guide message)
-    guide_text = (
-        f"**Registred Team for `{tournament_name}`**\n\n"
-        f"**Step 1:** Please type your team info in this channel as a message.\n"
-        f"**Step 2:** Use the following format:\n"
-        f"```Team Name: <your team name>\nMembers: @member1 @member2 ... (mention {team_size} members including yourself)```\n"
-        f"**Example:**\n"
-        f"```Team Name: Raze Nexus\nMembers: @user1 @user2 @user3```\n"
-        f"• Make sure to tag all your team members (including yourself).\n"
-        f"• Each team must have exactly {team_size} members.\n"
-        f"• Check registered teams in {registered_channel.mention}."
-    )
-    guide_embed = discord.Embed(
-        title=f"📋 Team Registration Guide",
-        description=guide_text,
-        color=discord.Color.blue()
-    )
-    await post_channel.send(embed=guide_embed)
 
     # Registration instructions (short summary)
     instructions = (
-        f"**Please provide yor team information for `{tournament_name}` !**\n\n"
+        f"**Please provide your team information for `{tournament_name}`!**\n\n"
         f"Reply in this channel with:\n"
         f"`Team Name: <your team name>`\n"
         f"`Members: @member1 @member2 ... (mention {team_size} members including yourself)`\n\n"
@@ -2048,7 +2087,8 @@ async def collect_teams(
         f"Team Name: Raze Nexus\n"
         f"Members: @user1 @user2 @user3\n\n"
         f"**Each team must have exactly {team_size} members.**\n"
-        )
+        f"**Maximum slots:** {max_slots}"
+    )
     
     embed = discord.Embed(
         title=f"🏆 {tournament_name} Registered Teams",
@@ -2067,6 +2107,354 @@ async def collect_teams(
         ephemeral=True
     )
 
-if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    bot.run(token)
+# Load configs on startup
+load_config()
+load_social_trackers()
+load_event_schedule()
+
+# Background task for social updates
+
+async def check_social_updates():
+    """Check all social trackers for updates"""
+    for guild_id, trackers in social_trackers.items():
+        for tracker in trackers:
+            try:
+                if tracker['platform'] == 'youtube':
+                    await check_youtube_update(guild_id, tracker)
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"⚠️ Error in social update: {e}")
+                
+async def social_update_task():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await check_social_updates()
+        except Exception as e:
+            print(f"⚠️ Social update error: {e}")
+        await asyncio.sleep(300)  # Check every 5 minutes
+
+async def event_schedule_notifier():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            now = datetime.utcnow()
+            for guild_id, events in event_schedule.items():
+                updated = False
+                for event in events:
+                    if event.get("notified"):
+                        continue
+                    
+
+                    
+                    event_time = datetime.fromisoformat(event["time"])
+                    time_diff = (event_time - now).total_seconds()
+
+                    if 0 <= time_diff <= 300:  # 5 minutes
+                        channel = bot.get_channel(int(event["channel_id"]))
+                        if not channel:
+                            continue
+
+                        role_mention = f"<@&{event['ping_role_id']}>" if event.get("ping_role_id") else ""
+
+                        embed = discord.Embed(
+                            title=f"🎮 {event['title']}",
+                            description=event['description'],
+                            color=discord.Color.orange(),
+                            timestamp=datetime.utcnow()
+                        )
+                        embed.add_field(name="🕒 Starts At", value=f"<t:{int(event_time.timestamp())}:F>")
+                        if event.get("image_url"):
+                            embed.set_image(url=event["image_url"])
+                        embed.set_footer(text="Tournament Reminder • Nexus Esports")
+
+                        await channel.send(content=role_mention if role_mention else None, embed=embed)
+                        
+                        event["notified"] = True
+                        updated = True
+
+                if updated:
+                    save_event_schedule()
+
+        except Exception as e:
+            print(f"⚠️ Event notifier error: {e}")
+        
+        await asyncio.sleep(60)  # check every 60 seconds
+
+async def check_youtube_update(guild_id, tracker):
+    if not youtube_service:
+        return
+
+    try:
+        # Get current channel stats
+        request = youtube_service.channels().list(
+            part='statistics,snippet',
+            id=tracker['channel_id']
+        )
+        response = request.execute()
+
+        if not response.get('items'):
+            return
+
+        stats = response['items'][0]['statistics']
+        snippet = response['items'][0]['snippet']
+        channel_name = snippet['title']
+        
+        # Get subscriber count
+        sub_count_raw = stats.get('subscriberCount')
+        
+        # Handle hidden subscriber counts - don't exit, just use previous value
+        if not sub_count_raw or not sub_count_raw.isdigit():
+            print(f"⚠️ Hidden subscriber count for {tracker['account_name']}")
+            current_subs = tracker.get('last_count', 0)
+        else:
+            current_subs = int(sub_count_raw)
+
+        last_subs = tracker.get('last_count', 0)
+
+        # Auto-fix corrupted or missing count
+        if not isinstance(last_subs, int) or last_subs == 0:
+            tracker['last_count'] = current_subs
+            save_social_trackers()
+
+        # If subscriber growth, send milestone alert
+        elif current_subs > last_subs:
+            tracker['last_count'] = current_subs
+            save_social_trackers()
+
+            channel = bot.get_channel(int(tracker['post_channel']))
+            if channel:
+                embed = discord.Embed(
+                    title="🎉 YouTube Milestone Reached!",
+                    description=(
+                        f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
+                        f"`+{current_subs - last_subs:,}` since last update"
+                    ),
+                    color=discord.Color.red(),
+                    url=tracker['url']
+                )
+                embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
+                embed.set_footer(text="Nexus Esports Social Tracker")
+                await channel.send(embed=embed)
+
+        # FIX 2: Add null check for video detection
+        # Detect new video uploads
+        upload_req = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            order="date",
+            maxResults=1,
+            type="video"
+        )
+        upload_res = upload_req.execute()
+        if upload_res.get('items'):
+            latest_video = upload_res['items'][0]
+            video_id = latest_video['id']['videoId']
+            video_title = latest_video['snippet']['title']
+            publish_time = latest_video['snippet']['publishedAt']
+
+            # Only notify if video_id exists and is different
+            if video_id and tracker.get("last_video_id") != video_id:
+                embed = discord.Embed(
+                    title=f"📺 New YouTube Video: {video_title}",
+                    url=f"https://youtu.be/{video_id}",
+                    description=f"A new video was uploaded on {tracker['account_name']}!",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                embed.add_field(name="Published", value=f"<t:{int(datetime.fromisoformat(publish_time.replace('Z','')).timestamp())}:R>", inline=True)
+                # Move thumbnail to bottom and make it bigger
+                embed.set_image(url=latest_video['snippet']['thumbnails']['high']['url'])
+                # Remove set_thumbnail if present
+                # Send notification
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    await channel.send(embed=embed)
+                tracker['last_video_id'] = video_id
+                save_social_trackers()
+
+        # FIX 3: Add null check for live detection
+        # Detect if channel is live
+        live_req = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            eventType="live",
+            type="video",
+            maxResults=1
+        )
+        live_res = live_req.execute()
+        if live_res.get('items'):
+            live_video = live_res['items'][0]
+            live_video_id = live_video['id']['videoId']
+            live_title = live_video['snippet']['title']
+            live_thumb = live_video['snippet']['thumbnails']['high']['url']
+
+            # --- Improved notification logic ---
+            now = datetime.utcnow().timestamp()
+            cooldown = 30 * 60  # 30 minutes in seconds
+            last_notified = tracker.get('last_live_notified', 0)
+            last_live_id = tracker.get('last_live_video_id')
+
+            should_notify = False
+            if live_video_id != last_live_id:
+                # New live stream detected
+                should_notify = True
+            elif now - last_notified > cooldown:
+                # Same stream, but cooldown passed
+                should_notify = True
+
+            if should_notify:
+                embed = discord.Embed(
+                    title=f"🔴 {tracker['account_name']} is LIVE!",
+                    url=f"https://youtu.be/{live_video_id}",
+                    description=f"{live_title}",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                embed.set_image(url=live_thumb)
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    await channel.send(embed=embed)
+                tracker['last_live_video_id'] = live_video_id
+                tracker['last_live_notified'] = now
+                save_social_trackers()
+
+    # FIX 4: Add proper error handling
+    except HttpError as e:
+        if e.resp.status == 403:
+            print(f"⚠️ YouTube API quota exceeded for {tracker['account_name']}")
+        else:
+            print(f"⚠️ YouTube API error: {e}")
+    except Exception as e:
+        print(f"Error in check_youtube_update: {e}")
+
+# Auto-reply to DMs
+@bot.event
+async def on_message(message):
+    # Check if it's a DM and not from the bot itself
+    if isinstance(message.channel, discord.DMChannel) and message.author != bot.user:
+        # Create professional response embed
+        embed = discord.Embed(
+            title="📬 Nexus Esports Support",
+            description=(
+                "Thank you for your message!\n\n"
+                "For official support, please contact:\n"
+                "• **@acroneop** in our Official Server\n"
+                "• Join: https://discord.gg/xPGJCWpMbM\n\n"
+                "We'll assist you as soon as possible!"
+            ),
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        # Set footer with required text
+        embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+        
+        # Try to send the response
+        try:
+            await message.channel.send(embed=embed)
+        except discord.Forbidden:
+            # Can't send message back (user blocked bot or closed DMs)
+            pass
+    
+    # --- Team Registration Handler ---
+    if message.guild and not message.author.bot:
+        guild_id = str(message.guild.id)
+        session = active_team_collections.get(guild_id)
+        if session and message.channel.id == session["post_channel_id"]:
+            # Prevent registration if max slots reached
+            if len(session.get("registered_teams", [])) >= session.get("max_slots", 0):
+                try:
+                    await message.reply(
+                        f"❌ Registration closed. Maximum of {session['max_slots']} teams already registered."
+                    )
+                except Exception:
+                    pass
+                return
+            # Parse team registration
+            lines = message.content.splitlines()
+            team_name = None
+            members = []
+            for line in lines:
+                if line.lower().startswith("team name:"):
+                    team_name = line.split(":", 1)[1].strip()
+                elif line.lower().startswith("members:"):
+                    member_ids = [int(m_id[3:-1]) for m_id in line.split() if m_id.startswith("<@") and m_id.endswith(">")]
+                    for m_id in member_ids:
+                        member = message.guild.get_member(m_id)
+                        if member:
+                            members.append(member)
+            if not members:
+                members = [m for m in message.mentions]
+            if message.author not in members:
+                members.insert(0, message.author)
+            members = list(dict.fromkeys(members))
+            # Validate
+            if not team_name or len(members) != session["team_size"]:
+                try:
+                    await message.reply(
+                        f"❌ Invalid registration format or wrong number of members ({len(members)}/{session['team_size']}).\n"
+                        f"Please follow the instructions in the registration message."
+                    )
+                except Exception:
+                    pass
+                return
+            # Prevent duplicate team names
+            if any(t["team_name"].lower() == team_name.lower() for t in session.get("registered_teams", [])):
+                try:
+                    await message.reply(
+                        f"❌ Team name `{team_name}` is already registered. Please choose a different name."
+                    )
+                except Exception:
+                    pass
+                return
+            # Prevent member from registering in multiple teams or multiple times
+            already_registered_ids = set()
+            for t in session.get("registered_teams", []):
+                already_registered_ids.update(t["members"])
+            duplicate_members = [m for m in members if m.id in already_registered_ids]
+            if duplicate_members:
+                try:
+                    await message.reply(
+                        f"❌ The following member(s) are already registered in another team: " +
+                        ", ".join(m.mention for m in duplicate_members) +
+                        "\nNo member can register in more than one team."
+                    )
+                except Exception:
+                    pass
+                return
+            # Post in registered_channel
+            registered_channel = message.guild.get_channel(session["registered_channel_id"])
+            if registered_channel:
+                member_mentions = " ".join(m.mention for m in members)
+                embed = discord.Embed(
+                    title=f"✅ Team Registered: {team_name}",
+                    description=f"**Members:** {member_mentions}",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.set_footer(text=f"Registered by {message.author.display_name}")
+                await registered_channel.send(embed=embed)
+            # Assign role
+            team_role = message.guild.get_role(session["team_role_id"])
+            if team_role:
+                for m in members:
+                    try:
+                        await m.add_roles(team_role, reason=f"Team registration for {session['tournament_name']}")
+                    except Exception:
+                        pass
+            # Save registered team
+            session.setdefault("registered_teams", []).append({
+                "team_name": team_name,
+                "members": [m.id for m in members]
+            })
+            # Confirm to user
+            try:
+                await message.reply(f"✅ Team **{team_name}** registered and role assigned!")
+            except Exception:
+                pass
+            return  # Do not process as command
+
+    # Process commands (important for command functionality)
+    await bot.process_commands(message)
