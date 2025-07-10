@@ -160,7 +160,7 @@ First click on Nexus Esports above
 and select 'Show All Channels' so that
 all channels become visible to you.
 and get yourself ✅verified by clicking on the
-<#1378412949475033148> channel.
+#verify channel.
 """
 
 DEFAULT_BANNER_URL = "https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif"
@@ -409,10 +409,10 @@ async def on_message(message: discord.Message):
                 # Check if tournament is full
                 if len(session["registered_teams"]) >= session["max_slots"]:
                     embed = discord.Embed(
-                        title="🏆 Tournament Registration Closed",
+                        title="Listing Closed",
                         description=(
-                            f"All {session['max_slots']} slots have been filled!\n"
-                            "No more teams can register for this tournament."
+                            f"All {session['max_slots']} slots have been finalized!\n"
+                            "Contact us if you are missed!."
                         ),
                         color=discord.Color.gold()
                     )
