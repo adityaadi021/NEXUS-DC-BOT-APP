@@ -1322,14 +1322,14 @@ async def on_member_join(member: discord.Member):
             welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
             
             file = discord.File(welcome_image, filename="welcome.png")
-            
+            text = f"Hey {member.member}!,"
             embed = discord.Embed(
                 description=f"Hey {member.mention}!\n```\n{welcome_text}\n```",
                 color=discord.Color(0x3e0000)
             )
             embed.set_image(url="attachment://welcome.png")
             
-            await channel.send(file=file, embed=embed)
+            await channel.send(file=file, embed=embed, text=text)
         else:
             # Fallback if image generation fails
             await channel.send(
