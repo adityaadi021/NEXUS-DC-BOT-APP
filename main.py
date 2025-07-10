@@ -150,6 +150,23 @@ def save_social_trackers():
     except Exception as e:
         print(f"⚠️ Error saving social trackers: {e}")
 
+
+DEFAULT_WELCOME_MESSAGE = """
+Hey {member}!,
+
+🔹 Welcome to Nexus Esports 🔹
+
+First click on Nexus Esports above
+and select 'Show All Channels' so that
+all channels become visible to you.
+and get yourself ✅verified by clicking on the
+<#1378412949475033148> channel.
+"""
+
+DEFAULT_BANNER_URL = "https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif"
+
+
+
 # Bot events
 @bot.event
 async def on_ready():
@@ -221,78 +238,56 @@ async def on_guild_remove(guild):
         save_social_trackers()
 
 
-async def generate_welcome_image(member: discord.Member):
+async def generate_welcome_card(member: discord.Member, banner_url: str):
     try:
-        # Check if Pillow is installed
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-        except ImportError:
-            print("Pillow not installed, skipping image generation")
-            return None
-
-        # Get avatar with error handling
-        try:
-            avatar_asset = member.display_avatar.with_format('png').with_size(256)
-            avatar_bytes = await avatar_asset.read()
-        except Exception as e:
-            print(f"Couldn't fetch avatar: {e}")
-            return None
-
-        try:
-            # Create image with context manager for proper cleanup
-            with Image.new("RGBA", (400, 500), (255, 255, 255, 0)) as base:
-                with Image.open(io.BytesIO(avatar_bytes)) as avatar_img:
-                    avatar_img = avatar_img.convert("RGBA")
-                    
-                    # Resize and paste avatar
-                    avatar_size = 256
-                    avatar_pos = ((400 - avatar_size) // 2, 20)
-                    base.paste(avatar_img.resize((avatar_size, avatar_size)), 
-                              avatar_pos, 
-                              avatar_img.resize((avatar_size, avatar_size)))
-
-                draw = ImageDraw.Draw(base)
+        # Create blank image (800x400)
+        width, height = 800, 400
+        base = Image.new('RGB', (width, height), (40, 40, 40))
+        
+        # Download and paste banner
+        async with aiohttp.ClientSession() as session:
+            async with session.get(banner_url) as resp:
+                if resp.status == 200:
+                    banner_data = await resp.read()
+                    banner = Image.open(io.BytesIO(banner_data)).convert('RGBA')
+                    banner = banner.resize((width, 300))
+                    base.paste(banner, (0, 0), banner)
+        
+        # Get and paste avatar (circular)
+        avatar_url = str(member.display_avatar.with_format('png').with_size(256))
+        async with session.get(avatar_url) as resp:
+            if resp.status == 200:
+                avatar_data = await resp.read()
+                avatar = Image.open(io.BytesIO(avatar_data)).convert('RGBA')
                 
-                # Font handling with better fallbacks
-                try:
-                    font_path = "arial.ttf"  # Try common fonts
-                    font_username = ImageFont.truetype(font_path, 36)
-                    font_member = ImageFont.truetype(font_path, 28)
-                except:
-                    # Use default font if specified font not found
-                    font_username = ImageFont.load_default(size=36)
-                    font_member = ImageFont.load_default(size=28)
-
-                # Draw username
-                username_text = str(member)
-                text_w, text_h = draw.textsize(username_text, font=font_username)
-                text_x = (400 - text_w) // 2
-                text_y = avatar_pos[1] + avatar_size + 20
-                draw.text((text_x, text_y), username_text, font=font_username, fill=(30, 30, 30, 255))
-
-                # Draw member count
-                member_no = sum(1 for m in member.guild.members if not m.bot)
-                member_text = f"you are our {member_no} member."
-                mem_w, mem_h = draw.textsize(member_text, font=font_member)
-                mem_x = (400 - mem_w) // 2
-                mem_y = text_y + text_h + 10
-                draw.text((mem_x, mem_y), member_text, font=font_member, fill=(120, 0, 0, 255))
-
-                # Save to bytes
-                img_bytes = io.BytesIO()
-                base.save(img_bytes, format="PNG")
-                img_bytes.seek(0)
-                return img_bytes
-
-        except Exception as e:
-            print(f"Error generating welcome image: {e}")
-            return None
-
+                # Create circular mask
+                mask = Image.new('L', (200, 200), 0)
+                draw = ImageDraw.Draw(mask)
+                draw.ellipse((0, 0, 200, 200), fill=255)
+                
+                avatar = avatar.resize((200, 200))
+                base.paste(avatar, (300, 250), mask)
+        
+        # Add text
+        draw = ImageDraw.Draw(base)
+        try:
+            font = ImageFont.truetype("arial.ttf", 30)
+        except:
+            font = ImageFont.load_default()
+        
+        draw.text((400, 320), f"Welcome {member.name}!", font=font, fill="white", anchor="mm")
+        
+        # Save to bytes
+        img_bytes = io.BytesIO()
+        base.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        return img_bytes
+        
     except Exception as e:
-        print(f"Unexpected error in image generation: {e}")
+        print(f"Error creating welcome card: {e}")
         return None
     
-    
+
 @bot.event
 async def on_message(message: discord.Message):
     # Existing auto-reply to DMs
@@ -1261,67 +1256,45 @@ async def dm_reply_to_user(interaction: discord.Interaction, message: discord.Me
     await interaction.response.send_modal(ReplyModal())
 
 # Welcome System Commands
-@bot.tree.command(name="set-welcome", description="Configure welcome messages (Admin only)")
+@bot.tree.command(name="set-welcome", description="Configure welcome messages")
 @app_commands.describe(
-    welcome_channel="Channel to send welcome messages",
-    welcome_message="(Optional) Custom welcome DM message",
-    image_url="(Optional) URL of image for welcome DM"
+    welcome_channel="Channel for welcome messages",
+    banner_url="URL of banner image",
+    welcome_message="Custom welcome message (use {member} for mention)"
 )
-async def set_welcome(interaction: discord.Interaction, 
+async def set_welcome(interaction: discord.Interaction,
                      welcome_channel: discord.TextChannel,
-                     welcome_message: Optional[str] = None,
-                     image_url: Optional[str] = None):
-    """Configure welcome system with optional custom DM message"""
-    if not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="You need 'Manage Server' permission",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-        return
-    
+                     banner_url: str,
+                     welcome_message: Optional[str] = None):
     guild_id = str(interaction.guild.id)
     
     if guild_id not in guild_configs:
         guild_configs[guild_id] = {}
     
-    guild_configs[guild_id]["welcome_channel"] = welcome_channel.id
-    
-    if welcome_message:
-        guild_configs[guild_id]["welcome_dm"] = welcome_message
-        msg_status = f"✅ Custom DM message set"
-    else:
-        if "welcome_dm" in guild_configs[guild_id]:
-            del guild_configs[guild_id]["welcome_dm"]
-        msg_status = "ℹ️ Using default DM welcome message"
-    
-    if image_url:
-        guild_configs[guild_id]["dm_attachment_url"] = image_url
-        img_status = f"✅ Image URL set"
-    else:
-        if "dm_attachment_url" in guild_configs[guild_id]:
-            del guild_configs[guild_id]["dm_attachment_url"]
-        img_status = "ℹ️ No welcome image configured"
+    guild_configs[guild_id].update({
+        "welcome_channel": welcome_channel.id,
+        "banner_url": banner_url,
+        "welcome_message": welcome_message or DEFAULT_WELCOME_MESSAGE
+    })
     
     save_config()
     
-    confirmation = (
-        f"**Welcome channel:** {welcome_channel.mention}\n"
-        f"**DM Message:** {msg_status}\n"
-        f"**Image:** {img_status}"
+    # Test the welcome message
+    embed = discord.Embed(
+        description=f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```",
+        color=discord.Color(0x3e0000)
     )
+    embed.set_image(url=banner_url)
     
     await interaction.response.send_message(
         embed=create_embed(
             title="✅ Welcome System Configured",
-            description=confirmation,
+            description=f"Welcome messages will be sent to {welcome_channel.mention}",
             color=discord.Color.green()
         ),
         ephemeral=True
     )
+    await welcome_channel.send(embed=embed)
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1330,45 +1303,46 @@ async def on_member_join(member: discord.Member):
     if guild_id not in guild_configs:
         return
 
-    # Welcome Channel Message
     welcome_channel_id = guild_configs[guild_id].get("welcome_channel")
-    if welcome_channel_id:
-        try:
-            channel = member.guild.get_channel(int(welcome_channel_id))
-            if channel:
-                # Try to generate image
-                img_bytes = await generate_welcome_image(member)
-                
-                if img_bytes:
-                    file = discord.File(img_bytes, filename="welcome.png")
-                    welcome_text = (
-                        f"Bro {member.mention},\n\n"
-                        "```\n"
-                        "First click on Nexus Esports above\n"
-                        "and select 'Show All Channels' so that\n"
-                        "all channels become visible to you.\n\n"
-                        "💕 Welcome to Nexus Esports 💕\n"
-                        "```"
-                    )
-                    embed = discord.Embed(description=welcome_text, color=discord.Color(0x3e0000))
-                    embed.set_image(url="attachment://welcome.png")
-                    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
-                    await channel.send(embed=embed, file=file)
-                else:
-                    # Fallback to simple welcome if image fails
-                    welcome_text = (
-                        f"💕 Welcome {member.mention} to Nexus Esports! 💕\n\n"
-                        "First click on Nexus Esports above\n"
-                        "and select 'Show All Channels'"
-                    )
-                    await channel.send(welcome_text)
-                    
-        except Exception as e:
-            print(f"Error sending channel welcome: {e}")
-            try:
-                await channel.send(f"Welcome {member.mention} to the server!")
-            except:
-                pass
+    if not welcome_channel_id:
+        return
+
+    channel = member.guild.get_channel(int(welcome_channel_id))
+    if not channel:
+        return
+
+    try:
+        # Get banner URL from config or use default
+        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        
+        # Generate welcome card with avatar and banner
+        welcome_image = await generate_welcome_card(member, banner_url)
+        
+        if welcome_image:
+            # Create embed with welcome text
+            welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
+            welcome_text = welcome_text.replace("{member}", member.mention)
+            
+            file = discord.File(welcome_image, filename="welcome.png")
+            
+            embed = discord.Embed(
+                description=f"```\n{welcome_text}\n```",
+                color=discord.Color(0x3e0000)
+            )
+            embed.set_image(url="attachment://welcome.png")
+            
+            await channel.send(file=file, embed=embed)
+        else:
+            # Fallback if image generation fails
+            await channel.send(
+                f"💕 Welcome {member.mention} to Nexus Esports! 💕\n\n"
+                "First click on Nexus Esports above\n"
+                "and select 'Show All Channels'"
+            )
+            
+    except Exception as e:
+        print(f"Error in welcome system: {e}")
+        await channel.send(f"Welcome {member.mention} to the server!")
 
     # Send DM welcome
     try:
@@ -1389,7 +1363,7 @@ async def on_member_join(member: discord.Member):
             await member.send(embed=embed)
         else:
             dm_message = (
-                "🌟 Welcome to Nexus Esports! 🌟\n\n"
+                "🔸Welcome to Nexus Esports!🔸\n\n"
                 "Thank you for joining our gaming community! We're excited to have you on board.\n\n"
                 "As mentioned in our welcome channel:\n"
                 "1. Click \"Nexus Esports\" at the top of the server\n"
@@ -1401,7 +1375,7 @@ async def on_member_join(member: discord.Member):
                 "• Check #announcements for news\n"
                 "• Join tournaments in #events\n\n"
                 "Need help? Contact @acroneop or our mod team anytime!\n\n"
-                "We're glad you're here! 🎮"
+                "We're glad you're here!💖 "
             )
             embed = discord.Embed(
                 description=dm_message,
