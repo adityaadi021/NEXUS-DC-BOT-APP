@@ -1593,25 +1593,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Bot stopped by user.")
         sys.exit(0)
-    guild_id = str(interaction.guild.id)
-    announce_role_id = guild_configs.get(guild_id, {}).get("announcement_role") if interaction.guild else None
-    
-    description = (
-        f"{perm_status}\n\n"
-        f"**Your roles:** {roles}\n"
-        f"**Announcement role ID:** {announce_role_id or 'Not set'}\n"
-        f"**Manage Messages permission:** {interaction.user.guild_permissions.manage_messages}\n"
-        f"**Server Owner:** {interaction.user.id == interaction.guild.owner_id}\n\n"
-        f"Contact server admins if you should have access."
-    )
-    
-    embed = create_embed(
-        title="🔑 Your Permissions",
-        description=description,
-        color=discord.Color.blue()
-    )
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="add-link", description="Add a professional formatted link")
 @app_commands.describe(
