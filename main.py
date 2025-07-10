@@ -138,13 +138,12 @@ async def on_ready():
 
         
 # --- SCRIM COMMANDS LOADING ---
-# Add this after bot definition and before on_ready
-# If scrim.py is a cog, use:
-try:
-    bot.load_extension("scrim")
-    print("✅ Scrim commands loaded.")
-except Exception as e:
-    print(f"⚠️ Could not load scrim extension: {e}")
+# Remove this block:
+# try:
+#     bot.load_extension("scrim")
+#     print("✅ Scrim commands loaded.")
+# except Exception as e:
+#     print(f"⚠️ Could not load scrim extension: {e}")
 
 # Load configs on startup
 def load_config():
@@ -402,6 +401,8 @@ async def event_schedule_notifier():
                 for event in events:
                     if event.get("notified"):
                         continue
+                    
+
                     
                     event_time = datetime.fromisoformat(event["time"])
                     time_diff = (event_time - now).total_seconds()
@@ -2458,3 +2459,882 @@ async def on_message(message):
 
     # Process commands (important for command functionality)
     await bot.process_commands(message)
+
+def create_embed(title: str = None, description: str = None, color: discord.Color = discord.Color(0x3e0000)) -> discord.Embed:
+    """Helper function to create consistent embeds"""
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color,
+        timestamp=datetime.utcnow()
+    )
+    # Set footer with required text
+    embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+    return embed
+
+def has_announcement_permission(interaction: discord.Interaction) -> bool:
+    """Check if user has announcement permissions through role or manage_messages"""
+    if not interaction.guild:
+        return False
+    
+    guild_id = str(interaction.guild.id)
+    
+    # Check if user has manage_messages permission
+    if interaction.user.guild_permissions.manage_messages:
+        return True
+    
+    # Check if user is server owner
+    if interaction.user.id == interaction.guild.owner_id:
+        return True
+    
+    # Check if user has announcement role
+    if guild_id in guild_configs:
+        role_id = guild_configs[guild_id].get("announcement_role")
+        if role_id:
+            return any(role.id == role_id for role in interaction.user.roles)
+    
+    return False
+
+@bot.tree.command(name="set-announce-role", description="Set announcement role for this server (Admin only)")
+@app_commands.describe(role="Role to use for announcement permissions")
+async def set_announce_role(interaction: discord.Interaction, role: discord.Role):
+    """Set the announcement role for the current server"""
+    if not interaction.user.guild_permissions.manage_guild:
+        embed = create_embed(
+            title="❌ Permission Denied",
+            description="You need 'Manage Server' permission to set announcement roles.",
+            color=discord.Color(0x3e0000)
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    guild_id = str(interaction.guild.id)
+    
+    # Initialize guild config if needed
+    if guild_id not in guild_configs:
+        guild_configs[guild_id] = {}
+    
+    # Save the role ID
+    guild_configs[guild_id]["announcement_role"] = role.id
+    save_config()
+    
+    embed = create_embed(
+        title="✅ Announcement Role Set",
+        description=f"{role.mention} is now the announcement role for this server.",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="sync-commands", description="Sync bot commands (Server Owner only)")
+async def sync_commands(interaction: discord.Interaction):
+    """Sync commands for the current server"""
+    # Check if user is server owner or bot owner
+    app_info = await bot.application_info()
+    is_bot_owner = interaction.user.id == app_info.owner.id
+    is_server_owner = interaction.guild and interaction.user.id == interaction.guild.owner_id
+    
+    if not (is_bot_owner or is_server_owner):
+        embed = create_embed(
+            title="❌ Permission Denied",
+            description="Only server owners or bot owners can sync commands.",
+            color=discord.Color(0x3e0000)
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    # Generate invite URL with proper scopes for troubleshooting
+    invite_url = discord.utils.oauth_url(
+        bot.user.id,
+        permissions=discord.Permissions(
+            send_messages=True,
+            embed_links=True,
+            view_channel=True,
+            read_message_history=True,
+            mention_everyone=True,
+            manage_messages=True,
+            attach_files=True
+        ),
+        scopes=("bot", "applications.commands")
+    )
+    
+    try:
+        # Sync for the current guild
+        if interaction.guild:
+            await bot.tree.sync(guild=interaction.guild)
+            message = f"✅ Commands synced for {interaction.guild.name}!"
+        else:
+            await bot.tree.sync()
+            message = "✅ Global commands synced!"
+        
+        embed = create_embed(
+            title="✅ Sync Successful",
+            description=message,
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    except discord.Forbidden as e:
+        # Provide detailed troubleshooting for permission issues
+        description = (
+            f"❌ **Sync Failed: Bot lacks permissions**\n"
+            f"Error: `{e}`\n\n"
+            "**Troubleshooting Steps:**\n"
+            "1. Re-invite the bot using this link with proper permissions:\n"
+            f"{invite_url}\n"
+            "2. Ensure the bot has **Manage Server** permission\n"
+            "3. Server owner must run this command\n"
+            "4. Check bot has `applications.commands` scope\n"
+            "5. Wait 1 hour after bot invite for permissions to propagate"
+        )
+        embed = create_embed(
+            title="❌ Sync Failed - Permissions Issue",
+            description=description,
+            color=discord.Color(0x3e0000)
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Exception as e:
+        # Provide detailed troubleshooting for other issues
+        description = (
+            f"❌ **Sync Failed**\n"
+            f"Error: `{e}`\n\n"
+            "**Troubleshooting Steps:**\n"
+            "1. Ensure the bot has `applications.commands` scope in invite\n"
+            "2. Re-invite the bot using this link:\n"
+            f"{invite_url}\n"
+            "3. Server owner must run this command\n"
+            "4. Try again in 5 minutes (Discord API might be slow)\n"
+            "5. Contact support if issue persists"
+        )
+        embed = create_embed(
+            title="❌ Sync Failed",
+            description=description,
+            color=discord.Color(0x3e0000)
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ChannelSelect(discord.ui.Select):
+    def __init__(self, channels):
+        options = [
+            discord.SelectOption(label=channel.name, value=str(channel.id))
+            for channel in channels if isinstance(channel, discord.TextChannel)
+        ][:25]  # Discord allows max 25 options
+
+        super().__init__(
+            placeholder="Select a channel to send the event notification",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TournamentEventView = self.view
+        view.selected_channel_id = int(self.values[0])
+        await interaction.response.send_modal(view.modal)
+
+class TournamentEventModal(Modal, title="📅 Schedule Tournament Event"):
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+        self.title_input = TextInput(label="Event Title", placeholder="e.g., Grand Finals")
+        self.description_input = TextInput(label="Description", style=discord.TextStyle.paragraph, required=True)
+        self.datetime_input = TextInput(label="Start Time (YYYY-MM-DD HH:MM IST)",placeholder="e.g., 2025-07-10 18:30",required=True)
+        self.role_input = TextInput(label="Ping Role ID or @mention (optional)", required=False)
+        self.image_input = TextInput(label="Image URL (optional)", required=False)
+
+        self.add_item(self.title_input)
+        self.add_item(self.description_input)
+        self.add_item(self.datetime_input)
+        self.add_item(self.role_input)
+        self.add_item(self.image_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        from dateutil.parser import parse as parse_datetime
+
+        try:
+            event_time_ist = parse_datetime(self.datetime_input.value)
+            event_time = event_time_ist - timedelta(hours=5, minutes=30)
+            if event_time < datetime.utcnow():
+                raise ValueError("Event time must be in the future.")
+
+            role_id = None
+            if self.role_input.value:
+                if self.role_input.value.startswith("<@&"):
+                    role_id = int(self.role_input.value[3:-1])
+                else:
+                    role_id = int(self.role_input.value.strip())
+
+            channel = interaction.guild.get_channel(self.view.selected_channel_id)
+            if not channel:
+                raise ValueError("Channel not found.")
+
+            guild_id = str(interaction.guild.id)
+            if guild_id not in event_schedule:
+                event_schedule[guild_id] = []
+
+            event_schedule[guild_id].append({
+                "title": self.title_input.value,
+                "description": self.description_input.value,
+                "time": event_time.isoformat(),
+                "channel_id": channel.id,
+                "ping_role_id": role_id,
+                "image_url": self.image_input.value or None,
+                "notified": False
+            })
+            save_event_schedule()
+
+            embed = discord.Embed(
+                title=f"✅ {self.title_input.value} Scheduled",
+                description=self.description_input.value,
+                color=discord.Color.green()
+            )
+            embed.add_field(name="📅 Start Time", value=f"<t:{int(event_time.timestamp())}:F>")
+            embed.add_field(name="📢 Channel", value=channel.mention)
+            if role_id:
+                embed.add_field(name="👥 Ping Role", value=f"<@&{role_id}>")
+            if self.image_input.value:
+                embed.set_image(url=self.image_input.value)
+
+            await interaction.response.send_message(embed=embed)
+
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=create_embed("❌ Error", str(e), color=discord.Color.red()),
+                ephemeral=True
+            )
+
+class TournamentEventView(View):
+    def __init__(self, channels):
+        super().__init__(timeout=120)
+        self.modal = TournamentEventModal(self)
+        self.selected_channel_id = None
+        self.add_item(ChannelSelect(channels))
+
+# Modal for announcement text
+class AnnouncementModal(Modal, title='Create Announcement'):
+    message = TextInput(
+        label='Announcement Content',
+        style=discord.TextStyle.paragraph,
+        placeholder='Enter your announcement here...',
+        required=True
+    )
+
+    def __init__(self, channel: discord.TextChannel, ping_everyone: bool, ping_here: bool, attachment: Optional[discord.Attachment] = None):
+        super().__init__()
+        self.channel = channel
+        self.ping_everyone = ping_everyone
+        self.ping_here = ping_here
+        self.attachment = attachment
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Create embed (removed "Official Announcement" text)
+        formatted_message = f"```\n{self.message.value}\n```"
+        embed = discord.Embed(
+            description=formatted_message,
+            color=discord.Color.gold(),
+            timestamp=datetime.utcnow()
+        )
+        # Set footer with required text
+        embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+        
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        
+        # Prepare ping string
+        ping_str = ""
+        if self.ping_everyone:
+            ping_str += "@everyone "
+        if self.ping_here:
+            ping_str += "@here "
+        
+        try:
+            # Handle attachment if present
+            files = []
+            if self.attachment:
+                file = await self.attachment.to_file()
+                files.append(file)
+            
+            # Send announcement
+            await self.channel.send(
+                content=ping_str if ping_str else None, 
+                embed=embed,
+                files=files,
+                allowed_mentions=discord.AllowedMentions(everyone=True) if (self.ping_everyone or self.ping_here) else None
+            )
+            
+            await interaction.response.send_message(
+                embed=create_embed(
+                    title="✅ Announcement Sent",
+                    description=f"Announcement posted in {self.channel.mention}!",
+                    color=discord.Color.green()
+                ),
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    title="❌ Announcement Failed",
+                    description=f"Error: {e}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+
+# Updated announce-simple command
+@bot.tree.command(name="announce-simple", description="Send a simple text announcement")
+@app_commands.describe(
+    channel="Channel to send announcement to",
+    ping_everyone="Ping @everyone with this announcement",
+    ping_here="Ping @here with this announcement"
+)
+async def announce_simple(interaction: discord.Interaction, 
+                         channel: discord.TextChannel,
+                         ping_everyone: bool = False,
+                         ping_here: bool = False):
+    if not has_announcement_permission(interaction):
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need announcement permissions!",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.send_modal(
+        AnnouncementModal(channel, ping_everyone, ping_here)
+    )
+
+# Updated announce-attachment command
+@bot.tree.command(name="announce-attachment", description="Send announcement with text and attachment")
+@app_commands.describe(
+    channel="Channel to send announcement to",
+    attachment="File to attach to the announcement",
+    ping_everyone="Ping @everyone with this announcement",
+    ping_here="Ping @here with this announcement"
+)
+async def announce_attachment(interaction: discord.Interaction, 
+                             channel: discord.TextChannel, 
+                             attachment: discord.Attachment,
+                             ping_everyone: bool = False,
+                             ping_here: bool = False):
+    if not has_announcement_permission(interaction):
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need announcement permissions!",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.send_modal(
+        AnnouncementModal(channel, ping_everyone, ping_here, attachment)
+    )
+
+@bot.tree.command(name="announce-only-attachment", description="Send announcement with only an attachment")
+@app_commands.describe(
+    channel="Channel to send announcement to",
+    attachment="File to attach to the announcement",
+    ping_everyone="Ping @everyone with this announcement",
+    ping_here="Ping @here with this announcement"
+)
+async def announce_only_attachment(interaction: discord.Interaction, 
+                                   channel: discord.TextChannel, 
+                                   attachment: discord.Attachment,
+                                   ping_everyone: bool = False,
+                                   ping_here: bool = False):
+    """Send announcement with only an attachment"""
+    if not has_announcement_permission(interaction):
+        embed = create_embed(
+            title="❌ Permission Denied",
+            description="You need the Announcement role or 'Manage Messages' permission!",
+            color=discord.Color(0x3e0000)
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    try:
+        # Prepare ping string
+        ping_str = ""
+        if ping_everyone:
+            ping_str += "@everyone "
+        if ping_here:
+            ping_str += "@here "
+        
+        # Process attachment
+        file = await attachment.to_file()
+        
+        # Send announcement with only attachment
+        await channel.send(
+            content=ping_str if ping_str else None, 
+            file=file,
+            allowed_mentions=discord.AllowedMentions(everyone=True) if (ping_everyone or ping_here) else None
+        )
+        
+        embed = create_embed(
+            title="✅ Announcement Sent",
+            description=f"Attachment-only announcement sent to {channel.mention}!",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Exception as e:
+        embed = create_embed(
+            title="❌ Announcement Failed",
+            description=f"Error: {e}",
+            color=discord.Color(0x3e0000)
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# Modal for DM messages
+class DMModal(Modal, title='Send Direct Message'):
+    message = TextInput(
+        label='Message Content',
+        style=discord.TextStyle.paragraph,
+        placeholder='Type your message here...',
+        required=True
+    )
+
+    def __init__(self, user: discord.User, attachment: Optional[discord.Attachment] = None):
+        super().__init__()
+        self.user = user
+        self.attachment = attachment
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            # Create formatted message with larger font (using code block)
+            formatted_message = (
+                f"**📩 Message from {interaction.guild.name}:**\n"
+                f"```\n{self.message.value}\n```\n\n"
+                "For any queries or further support, contact @acroneop in our Official Server:\n"
+                "https://discord.gg/xPGJCWpMbM"
+            )
+            
+            if self.attachment:
+                formatted_message += "\n\n📎 *Attachment included*"
+            
+            # Create embed with footer and timestamp
+            embed = discord.Embed(
+                description=formatted_message,
+                color=discord.Color(0x3e0000),
+                timestamp=datetime.utcnow()
+            )
+            # Set footer with required text
+            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+            
+            # Handle attachment
+            files = []
+            if self.attachment:
+                file = await self.attachment.to_file()
+                files.append(file)
+                embed.set_image(url=f"attachment://{file.filename}")
+            
+            # Send DM
+            await self.user.send(embed=embed, files=files)
+            
+            # Confirm to sender
+            confirm_message = f"Message sent to {self.user.mention}"
+            if self.attachment:
+                confirm_message += f" with attachment: {self.attachment.filename}"
+            
+            await interaction.response.send_message(
+                embed=create_embed(
+                    title="✅ DM Sent",
+                    description=confirm_message,
+                    color=discord.Color.green()
+                ),
+                ephemeral=True
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    title="❌ Failed to Send DM",
+                    description="This user has DMs disabled or blocked the bot.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    title="❌ Error",
+                    description=f"An error occurred: {str(e)}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+
+# Updated dm-user command
+@bot.tree.command(name="dm-user", description="Send a DM to a specific user (Mods only)")
+@app_commands.describe(
+    user="The user to DM",
+    attachment="(Optional) File to attach"
+)
+async def dm_user(interaction: discord.Interaction, 
+                 user: discord.User,
+                 attachment: Optional[discord.Attachment] = None):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Messages' permission",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.send_modal(DMModal(user, attachment))
+
+# New: DM Reply Command (Context Menu)
+@bot.tree.context_menu(name="DM Reply to User")
+async def dm_reply_to_user(interaction: discord.Interaction, message: discord.Message):
+    """Reply to a user via DM regarding their message"""
+    # Check permissions
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Messages' permission",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+    
+    # Create modal for the reply
+    class ReplyModal(Modal, title='DM Reply to User'):
+        reply_message = TextInput(
+            label='Your reply',
+            style=discord.TextStyle.paragraph,
+            placeholder='Type your reply here...',
+            required=True
+        )
+        
+        async def on_submit(self, interaction: discord.Interaction):
+            try:
+                # Create the DM message with context
+                formatted_content = (
+                    f"**📩 Reply from {interaction.guild.name} regarding your message:**\n"
+                    f"```\n{message.content}\n```\n\n"
+                    f"**Moderator's reply:**\n"
+                    f"```\n{self.reply_message.value}\n```\n\n"
+                    "For any queries or further support, contact @acroneop in our Official Server:\n"
+                    "https://discord.gg/xPGJCWpMbM"
+                )
+                
+                embed = discord.Embed(
+                    description=formatted_content,
+                    color=discord.Color(0x3e0000),
+                    timestamp=datetime.utcnow()
+                )
+                embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+                
+                # Send the DM
+                await message.author.send(embed=embed)
+                
+                # Confirm to the moderator
+                await interaction.response.send_message(
+                    embed=create_embed(
+                        title="✅ Reply Sent",
+                        description=f"Reply sent to {message.author.mention} via DM!",
+                        color=discord.Color.green()
+                    ),
+                    ephemeral=True
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    embed=create_embed(
+                        title="❌ Failed to Send DM",
+                        description="This user has DMs disabled or blocked the bot.",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+            except Exception as e:
+                await interaction.response.send_message(
+                    embed=create_embed(
+                        title="❌ Error",
+                        description=f"An error occurred: {str(e)}",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+    
+    await interaction.response.send_modal(ReplyModal())
+
+# Modal for welcome configuration
+class WelcomeConfigModal(Modal, title='Configure Welcome'):
+    dm_message = TextInput(
+        label='Welcome DM Message',
+        style=discord.TextStyle.paragraph,
+        placeholder='Enter the welcome message for new members...',
+        required=True
+    )
+    dm_attachment_url = TextInput(
+        label='Welcome Image URL (optional)',
+        placeholder='https://example.com/image.png',
+        required=False
+    )
+
+    def __init__(self, channel: discord.TextChannel):
+        super().__init__()
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild.id)
+        
+        # Initialize guild config if needed
+        if guild_id not in guild_configs:
+            guild_configs[guild_id] = {}
+        
+        # Save settings
+        guild_configs[guild_id]["welcome_channel"] = self.channel.id
+        guild_configs[guild_id]["welcome_dm"] = self.dm_message.value
+        if self.dm_attachment_url.value:
+            guild_configs[guild_id]["dm_attachment_url"] = self.dm_attachment_url.value
+        save_config()
+        
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="✅ Welcome System Configured",
+                description=(
+                    f"Welcome messages will be sent to {self.channel.mention}\n"
+                    f"DM message set to: ```\n{self.dm_message.value}\n```"
+                ),
+                color=discord.Color.green()
+            ),
+            ephemeral=True
+        )
+
+# Updated set-welcome command
+@bot.tree.command(name="set-welcome", description="Configure welcome messages (Admin only)")
+@app_commands.describe(
+    welcome_channel="Channel to send welcome messages",
+    welcome_message="(Optional) Custom welcome DM message",
+    image_url="(Optional) URL of image for welcome DM"
+)
+async def set_welcome(interaction: discord.Interaction, 
+                     welcome_channel: discord.TextChannel,
+                     welcome_message: Optional[str] = None,
+                     image_url: Optional[str] = None):
+    """Configure welcome system with optional custom DM message"""
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Server' permission",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+    
+    guild_id = str(interaction.guild.id)
+    
+    # Initialize guild config
+    if guild_id not in guild_configs:
+        guild_configs[guild_id] = {}
+    
+    # Save welcome channel
+    guild_configs[guild_id]["welcome_channel"] = welcome_channel.id
+    
+    # Handle custom DM message
+    if welcome_message:
+        # Save custom message if provided
+        guild_configs[guild_id]["welcome_dm"] = welcome_message
+        msg_status = f"✅ Custom DM message set"
+    else:
+        # Remove custom message to use fallback
+        if "welcome_dm" in guild_configs[guild_id]:
+            del guild_configs[guild_id]["welcome_dm"]
+        msg_status = "ℹ️ Using default DM welcome message"
+    
+    # Handle image URL
+    if image_url:
+        guild_configs[guild_id]["dm_attachment_url"] = image_url
+        img_status = f"✅ Image URL set"
+    else:
+        if "dm_attachment_url" in guild_configs[guild_id]:
+            del guild_configs[guild_id]["dm_attachment_url"]
+        img_status = "ℹ️ No welcome image configured"
+    
+    save_config()
+    
+    # Build confirmation message
+    confirmation = (
+        f"**Welcome channel:** {welcome_channel.mention}\n"
+        f"**DM Message:** {msg_status}\n"
+        f"**Image:** {img_status}"
+    )
+    
+    await interaction.response.send_message(
+        embed=create_embed(
+            title="✅ Welcome System Configured",
+            description=confirmation,
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """Send welcome messages when a member joins"""
+    guild_id = str(member.guild.id)
+
+    # Check if welcome is configured
+    if guild_id not in guild_configs:
+        return
+
+    welcome_channel_id = guild_configs[guild_id].get("welcome_channel")
+
+    # Send channel welcome
+    if welcome_channel_id:
+        try:
+            # Ensure channel ID is int
+            channel = member.guild.get_channel(int(welcome_channel_id))
+            if channel:
+                # --- Custom Welcome Image Generation ---
+                # Get member's avatar (static, 256x256)
+                avatar_asset = member.display_avatar.replace(format="png", size=256)
+                avatar_bytes = await avatar_asset.read()
+                avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+
+                # Create base image (width 400, height 500)
+                base = Image.new("RGBA", (400, 500), (255, 255, 255, 0))
+                # Paste avatar in center top
+                avatar_size = 256
+                avatar_pos = ((400 - avatar_size) // 2, 20)
+                base.paste(avatar_img.resize((avatar_size, avatar_size)), avatar_pos, avatar_img.resize((avatar_size, avatar_size)))
+
+                draw = ImageDraw.Draw(base)
+
+                # Load a font (fallback to default if not found)
+                try:
+                    font_username = ImageFont.truetype("arial.ttf", 36)
+                    font_member = ImageFont.truetype("arial.ttf", 28)
+                except:
+                    font_username = ImageFont.load_default()
+                    font_member = ImageFont.load_default()
+
+                # Username text
+                username_text = str(member)
+                text_w, text_h = draw.textsize(username_text, font=font_username)
+                text_x = (400 - text_w) // 2
+                text_y = avatar_pos[1] + avatar_size + 20
+                draw.text((text_x, text_y), username_text, font=font_username, fill=(30, 30, 30, 255))
+
+                # Member number
+                member_no = sum(1 for m in member.guild.members if not m.bot)
+                member_text = f"you are our {member_no} member."
+                mem_w, mem_h = draw.textsize(member_text, font=font_member)
+                mem_x = (400 - mem_w) // 2
+                mem_y = text_y + text_h + 10
+                draw.text((mem_x, mem_y), member_text, font=font_member, fill=(120, 0, 0, 255))
+
+                # Save to BytesIO
+                img_bytes = io.BytesIO()
+                base.save(img_bytes, format="PNG")
+                img_bytes.seek(0)
+
+                file = discord.File(img_bytes, filename="welcome.png")
+
+                # Create embed with proper formatting
+                welcome_text = (
+                    "First click on Nexus Esports above\n"
+                    "and select 'Show All Channels' so that\n"
+                    "all channels become visible to you.\n\n"
+                    "💕 Welcome to Nexus Esports 💕"
+                )
+                
+                embed = discord.Embed(
+                    description=(
+                        f"Bro {member.mention},\n\n"  # Mention outside the code block
+                        f"```\n{welcome_text}\n```"   # Instructions inside code block
+                    ),
+                    color=discord.Color(0x3e0000)
+                )
+                # Set GIF as secondary image (if you want both, use embed.set_thumbnail for GIF)
+                embed.set_image(url="attachment://welcome.png")
+                embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif")
+                
+                await channel.send(embed=embed, file=file)
+        except Exception as e:
+            print(f"⚠️ Error sending channel welcome: {e}")
+
+    # Send DM welcome
+    try:
+        welcome_dm = guild_configs[guild_id].get("welcome_dm")
+        dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
+        
+        if welcome_dm:
+            # Use configured DM
+            embed = discord.Embed(
+                description=welcome_dm,
+                color=discord.Color(0x3e0000),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+            
+            # Add attachment if provided
+            if dm_attachment_url:
+                embed.set_image(url=dm_attachment_url)
+            
+            if member.guild.icon:
+                embed.set_thumbnail(url=member.guild.icon.url)
+            
+            await member.send(embed=embed)
+        else:
+            # Fallback to fixed DM
+            dm_message = (
+                "🌟 Welcome to Nexus Esports! 🌟\n\n"
+                "Thank you for joining our gaming community! We're excited to have you on board.\n\n"
+                "As mentioned in our welcome channel:\n"
+                "1. Click \"Nexus Esports\" at the top of the server\n"
+                "2. Select \"Show All Channels\" to access everything\n"
+                "3. Explore our community spaces!\n\n"
+                "Quick Start:\n"
+                "• Read #rules for guidelines\n"
+                "• Introduce yourself in #introductions\n"
+                "• Check #announcements for news\n"
+                "• Join tournaments in #events\n\n"
+                "Need help? Contact @acroneop or our mod team anytime!\n\n"
+                "We're glad you're here! 🎮"
+            )
+            
+            embed = discord.Embed(
+                description=dm_message,
+                color=discord.Color(0x3e0000),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+            
+            if member.guild.icon:
+                embed.set_thumbnail(url=member.guild.icon.url)
+            
+            await member.send(embed=embed)
+    except discord.Forbidden:
+        pass  # User has DMs disabled
+    except Exception as e:
+        print(f"⚠️ Error sending welcome DM: {e}")
+
+# --- SCRIM COMMANDS LOADING ---
+import sys
+
+async def main():
+    try:
+        await bot.load_extension("scrim")
+        print("✅ Scrim commands loaded.")
+    except Exception as e:
+        print(f"⚠️ Could not load scrim extension: {e}")
+    # Optionally, run Flask in a thread if needed
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    await bot.start(token)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped by user.")
+        sys.exit(0)
+
