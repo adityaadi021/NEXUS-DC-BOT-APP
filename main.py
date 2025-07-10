@@ -64,8 +64,6 @@ EVENT_FILE = "event_schedule.json"
 event_schedule = {}
 SOCIAL_FILE = "social_trackers.json"
 social_trackers = {}
-AVATAR_FILE = "bot_avatar.gif"
-BANNER_FILE = "bot_banner.png"
 active_team_collections = {}
 
 # Helper functions
@@ -152,21 +150,6 @@ def save_social_trackers():
     except Exception as e:
         print(f"⚠️ Error saving social trackers: {e}")
 
-async def set_bot_assets_on_startup():
-    """Automatically set bot avatar and banner on startup if files exist"""
-    try:
-        if os.path.exists(AVATAR_FILE):
-            with open(AVATAR_FILE, "rb") as f:
-                await bot.user.edit(avatar=f.read())
-            print("✅ Bot avatar set automatically!")
-        
-        if os.path.exists(BANNER_FILE):
-            with open(BANNER_FILE, "rb") as f:
-                await bot.user.edit(banner=f.read())
-            print("✅ Bot banner set automatically!")
-    except Exception as e:
-        print(f"⚠️ Failed to set bot assets on startup: {e}")
-
 # Bot events
 @bot.event
 async def on_ready():
@@ -192,8 +175,6 @@ async def on_ready():
         status=discord.Status.online,
         activity=discord.Game('Watching')
     )
-    
-    await set_bot_assets_on_startup()
     
     if not commands_synced:
         try:
@@ -255,7 +236,6 @@ async def on_message(message: discord.Message):
             timestamp=datetime.utcnow()
         )
         embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
-        
         try:
             await message.channel.send(embed=embed)
         except discord.Forbidden:
@@ -268,23 +248,28 @@ async def on_message(message: discord.Message):
         
         if session and message.channel.id == session["post_channel_id"]:
             try:
+                # First add reaction to show bot is processing
+                await message.add_reaction('⏳')
+                
                 # Parse team information
-                content = message.content.split('\n')
+                content = [line.strip() for line in message.content.split('\n') if line.strip()]
                 if len(content) < 2:
-                    raise ValueError("Invalid format. Please provide both team name and members.")
+                    raise ValueError("Invalid format. Need both team name and members.")
                 
                 # Extract team name
-                team_name_line = content[0].strip()
+                team_name_line = content[0]
                 if not team_name_line.lower().startswith('team name:'):
                     raise ValueError("First line must start with 'Team Name:'")
                 team_name = team_name_line.split(':', 1)[1].strip()
+                if not team_name:
+                    raise ValueError("Team name cannot be empty")
                 
                 # Extract members
-                members_line = content[1].strip()
+                members_line = content[1]
                 if not members_line.lower().startswith('members:'):
                     raise ValueError("Second line must start with 'Members:'")
                 
-                # Parse mentions
+                # Parse mentions and validate
                 members = []
                 for mention in message.mentions:
                     if mention != message.author and mention not in members:
@@ -295,23 +280,23 @@ async def on_message(message: discord.Message):
                 if len(members) + 1 != required_size:  # +1 for author
                     raise ValueError(f"Team must have exactly {required_size} members (including yourself)")
                 
-                # Check if author is in members (they should mention others)
+                # Check if author is in members
                 if message.author in members:
-                    raise ValueError("Don't include yourself in the members list - you're automatically included")
+                    raise ValueError("Don't include yourself in members list")
                 
-                # Check for duplicate teams
+                # Check for duplicate teams/players
                 for team in session["registered_teams"]:
                     if team_name.lower() == team["name"].lower():
                         raise ValueError("Team name already taken")
                     if message.author.id in team["member_ids"]:
-                        raise ValueError("You're already registered in another team")
+                        raise ValueError("You're already in another team")
                     for member in members:
                         if member.id in team["member_ids"]:
                             raise ValueError(f"{member.display_name} is already in another team")
                 
                 # Check slot availability
                 if len(session["registered_teams"]) >= session["max_slots"]:
-                    raise ValueError("Tournament is full, no more slots available")
+                    raise ValueError("Tournament is full")
                 
                 # Register the team
                 team_data = {
@@ -348,38 +333,66 @@ async def on_message(message: discord.Message):
                     )
                     await registered_channel.send(embed=embed)
                 
-                # Send confirmation
-                await message.channel.send(
-                    f"✅ Team **{team_name}** registered successfully!",
-                    delete_after=10
-                )
+                # Update reactions
+                await message.remove_reaction('⏳', bot.user)
+                await message.add_reaction('✅')
                 
-                # Delete the original message to keep channel clean
-                try:
-                    await message.delete()
-                except discord.Forbidden:
-                    pass
+                # Check if tournament is full
+                if len(session["registered_teams"]) >= session["max_slots"]:
+                    embed = discord.Embed(
+                        title="🏆 Tournament Registration Closed",
+                        description=(
+                            f"All {session['max_slots']} slots have been filled!\n"
+                            "No more teams can register for this tournament."
+                        ),
+                        color=discord.Color.gold()
+                    )
+                    await message.channel.send(embed=embed)
+                    
+                    # Post final team list
+                    final_embed = discord.Embed(
+                        title=f"🏆 Final Teams for {session['tournament_name']}",
+                        color=discord.Color.blurple()
+                    )
+                    
+                    for i, team in enumerate(session["registered_teams"], 1):
+                        members = ', '.join([f"<@{mid}>" for mid in team["member_ids"]])
+                        final_embed.add_field(
+                            name=f"{i}. {team['name']}",
+                            value=f"👤 {members}",
+                            inline=False
+                        )
+                    
+                    await registered_channel.send(embed=final_embed)
+                    del active_team_collections[guild_id]
                 
             except ValueError as e:
-                await message.channel.send(
-                    f"❌ Error: {str(e)}\n\n"
-                    "Please use format:\n"
+                await message.remove_reaction('⏳', bot.user)
+                await message.add_reaction('❌')
+                error_msg = await message.channel.send(
+                    f"{message.author.mention} ❌ Error: {str(e)}\n"
+                    "Correct format:\n"
                     "```\n"
                     "Team Name: Your Team Name\n"
                     "Members: @member1 @member2 ...\n"
                     "```",
-                    delete_after=15
-                )
-                try:
-                    await message.delete()
-                except discord.Forbidden:
-                    pass
-            except Exception as e:
-                print(f"Error processing team registration: {e}")
-                await message.channel.send(
-                    "❌ An unexpected error occurred. Please try again.",
                     delete_after=10
                 )
+                await asyncio.sleep(5)
+                await message.delete()
+                await error_msg.delete()
+                
+            except Exception as e:
+                print(f"Error processing team registration: {e}")
+                await message.remove_reaction('⏳', bot.user)
+                await message.add_reaction('❌')
+                error_msg = await message.channel.send(
+                    f"{message.author.mention} ❌ An error occurred. Please try again.",
+                    delete_after=10
+                )
+                await asyncio.sleep(5)
+                await message.delete()
+                await error_msg.delete()
     
     await bot.process_commands(message)
 
@@ -1688,7 +1701,7 @@ async def collect_teams(
     await post_channel.send(embed=embed)
     await interaction.response.send_message(
         embed=create_embed(
-            title="Thank you!",
+            title="Collecting TEAMS as per your preferences!",
             description=f"posted in {post_channel.mention}. Teams will be posted in {registered_channel.mention}.",
             color=discord.Color.green()
         ),
@@ -1696,7 +1709,7 @@ async def collect_teams(
     )
 
 # Utility Commands
-@bot.tree.command(name="add-link", description="Add a professional formatted link")
+@bot.tree.command(name="add-link", description="Add link professionally")
 @app_commands.describe(
     url="The URL to add (must start with http:// or https://)",
     title="(Optional) Title for the link",
@@ -1717,13 +1730,13 @@ async def add_link(interaction: discord.Interaction,
         )
     
     try:
-        link_text = f"[Click Here]({url})"
+        link_text = f"[Click Here to visit]({url})"
         embed_description = f"**➤ {link_text}**"
         if description:
             embed_description += f"\n\n{description}"
         
         embed = create_embed(
-            title=title if title else "🔗 Nexus Esports Link",
+            title=title if title else "Link here",
             description=embed_description,
             color=discord.Color(0x3e0000)
         )
