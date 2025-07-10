@@ -239,8 +239,8 @@ async def on_guild_remove(guild):
         save_social_trackers()
 
 @bot.event
-async def on_message(message):
-    # Auto-reply to DMs
+async def on_message(message: discord.Message):
+    # Existing auto-reply to DMs
     if isinstance(message.channel, discord.DMChannel) and message.author != bot.user:
         embed = discord.Embed(
             title="📬 Nexus Esports Support",
@@ -265,9 +265,121 @@ async def on_message(message):
     if message.guild and not message.author.bot:
         guild_id = str(message.guild.id)
         session = active_team_collections.get(guild_id)
+        
         if session and message.channel.id == session["post_channel_id"]:
-            # Team registration logic here
-            pass
+            try:
+                # Parse team information
+                content = message.content.split('\n')
+                if len(content) < 2:
+                    raise ValueError("Invalid format. Please provide both team name and members.")
+                
+                # Extract team name
+                team_name_line = content[0].strip()
+                if not team_name_line.lower().startswith('team name:'):
+                    raise ValueError("First line must start with 'Team Name:'")
+                team_name = team_name_line.split(':', 1)[1].strip()
+                
+                # Extract members
+                members_line = content[1].strip()
+                if not members_line.lower().startswith('members:'):
+                    raise ValueError("Second line must start with 'Members:'")
+                
+                # Parse mentions
+                members = []
+                for mention in message.mentions:
+                    if mention != message.author and mention not in members:
+                        members.append(mention)
+                
+                # Validate team size
+                required_size = session["team_size"]
+                if len(members) + 1 != required_size:  # +1 for author
+                    raise ValueError(f"Team must have exactly {required_size} members (including yourself)")
+                
+                # Check if author is in members (they should mention others)
+                if message.author in members:
+                    raise ValueError("Don't include yourself in the members list - you're automatically included")
+                
+                # Check for duplicate teams
+                for team in session["registered_teams"]:
+                    if team_name.lower() == team["name"].lower():
+                        raise ValueError("Team name already taken")
+                    if message.author.id in team["member_ids"]:
+                        raise ValueError("You're already registered in another team")
+                    for member in members:
+                        if member.id in team["member_ids"]:
+                            raise ValueError(f"{member.display_name} is already in another team")
+                
+                # Check slot availability
+                if len(session["registered_teams"]) >= session["max_slots"]:
+                    raise ValueError("Tournament is full, no more slots available")
+                
+                # Register the team
+                team_data = {
+                    "name": team_name,
+                    "captain_id": message.author.id,
+                    "member_ids": [m.id for m in [message.author] + members],
+                    "registration_time": datetime.utcnow().isoformat()
+                }
+                session["registered_teams"].append(team_data)
+                
+                # Assign team role
+                team_role = message.guild.get_role(session["team_role_id"])
+                if team_role:
+                    try:
+                        await message.author.add_roles(team_role)
+                        for member in members:
+                            await member.add_roles(team_role)
+                    except discord.Forbidden:
+                        print(f"Missing permissions to assign role {team_role.name}")
+                
+                # Post in registered channel
+                registered_channel = message.guild.get_channel(session["registered_channel_id"])
+                if registered_channel:
+                    member_mentions = ' '.join([f"<@{mid}>" for mid in team_data["member_ids"]])
+                    embed = discord.Embed(
+                        title=f"Team Registered: {team_name}",
+                        description=(
+                            f"**Captain:** <@{message.author.id}>\n"
+                            f"**Members:** {member_mentions}\n"
+                            f"**Slot:** {len(session['registered_teams'])}/{session['max_slots']}"
+                        ),
+                        color=discord.Color.green(),
+                        timestamp=datetime.utcnow()
+                    )
+                    await registered_channel.send(embed=embed)
+                
+                # Send confirmation
+                await message.channel.send(
+                    f"✅ Team **{team_name}** registered successfully!",
+                    delete_after=10
+                )
+                
+                # Delete the original message to keep channel clean
+                try:
+                    await message.delete()
+                except discord.Forbidden:
+                    pass
+                
+            except ValueError as e:
+                await message.channel.send(
+                    f"❌ Error: {str(e)}\n\n"
+                    "Please use format:\n"
+                    "```\n"
+                    "Team Name: Your Team Name\n"
+                    "Members: @member1 @member2 ...\n"
+                    "```",
+                    delete_after=15
+                )
+                try:
+                    await message.delete()
+                except discord.Forbidden:
+                    pass
+            except Exception as e:
+                print(f"Error processing team registration: {e}")
+                await message.channel.send(
+                    "❌ An unexpected error occurred. Please try again.",
+                    delete_after=10
+                )
     
     await bot.process_commands(message)
 
@@ -1796,3 +1908,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Bot stopped by user.")
         sys.exit(0)
+        
