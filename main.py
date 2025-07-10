@@ -152,7 +152,6 @@ def save_social_trackers():
 
 
 DEFAULT_WELCOME_MESSAGE = """
-Hey {member}!,
 
 🔹 Welcome to Nexus Esports 🔹
 
@@ -1321,12 +1320,11 @@ async def on_member_join(member: discord.Member):
         if welcome_image:
             # Create embed with welcome text
             welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-            welcome_text = welcome_text.replace("{member}", member.mention)
             
             file = discord.File(welcome_image, filename="welcome.png")
             
             embed = discord.Embed(
-                description=f"```\n{welcome_text}\n```",
+                description=f"Hey {member.mention}!\n```\n{welcome_text}\n```",
                 color=discord.Color(0x3e0000)
             )
             embed.set_image(url="attachment://welcome.png")
@@ -1335,15 +1333,15 @@ async def on_member_join(member: discord.Member):
         else:
             # Fallback if image generation fails
             await channel.send(
-                f"💕 Welcome {member.mention} to Nexus Esports! 💕\n\n"
+                f"💕 Hey {member.mention}! Welcome to Nexus Esports! 💕\n\n"
                 "First click on Nexus Esports above\n"
                 "and select 'Show All Channels'"
             )
             
     except Exception as e:
         print(f"Error in welcome system: {e}")
-        await channel.send(f"Welcome {member.mention} to the server!")
-
+        await channel.send(f"Hey {member.mention}! Welcome to the server!")
+        
     # Send DM welcome
     try:
         welcome_dm = guild_configs[guild_id].get("welcome_dm")
@@ -1351,7 +1349,7 @@ async def on_member_join(member: discord.Member):
         
         if welcome_dm:
             embed = discord.Embed(
-                description=welcome_dm,
+                description=f"Hey {member.mention}!\n{welcome_dm}",
                 color=discord.Color(0x3e0000),
                 timestamp=datetime.utcnow()
             )
@@ -1363,6 +1361,7 @@ async def on_member_join(member: discord.Member):
             await member.send(embed=embed)
         else:
             dm_message = (
+                f"Hey {member.mention}!\n\n"
                 "🔸Welcome to Nexus Esports!🔸\n\n"
                 "Thank you for joining our gaming community! We're excited to have you on board.\n\n"
                 "As mentioned in our welcome channel:\n"
