@@ -2021,15 +2021,15 @@ async def collect_teams(
 
     # Registration instructions (guide message)
     guide_text = (
-        f"**How to Register Your Team for `{tournament_name}`**\n\n"
-        f"**Step 1:** Type your team info in this channel as a message.\n"
+        f"**Registred Team for `{tournament_name}`**\n\n"
+        f"**Step 1:** Please type your team info in this channel as a message.\n"
         f"**Step 2:** Use the following format:\n"
         f"```Team Name: <your team name>\nMembers: @member1 @member2 ... (mention {team_size} members including yourself)```\n"
         f"**Example:**\n"
-        f"```Team Name: Nexus Legends\nMembers: @user1 @user2 @user3```\n"
+        f"```Team Name: Raze Nexus\nMembers: @user1 @user2 @user3```\n"
         f"• Make sure to tag all your team members (including yourself).\n"
         f"• Each team must have exactly {team_size} members.\n"
-        f"• After you send your message, the bot will confirm and post your team in {registered_channel.mention}."
+        f"• Check registered teams in {registered_channel.mention}."
     )
     guide_embed = discord.Embed(
         title=f"📋 Team Registration Guide",
@@ -2040,28 +2040,28 @@ async def collect_teams(
 
     # Registration instructions (short summary)
     instructions = (
-        f"**Team Registration for `{tournament_name}` is now OPEN!**\n\n"
-        f"To register your team, reply in this channel with:\n"
+        f"**Please provide yor team information for `{tournament_name}` !**\n\n"
+        f"Reply in this channel with:\n"
         f"`Team Name: <your team name>`\n"
         f"`Members: @member1 @member2 ... (mention {team_size} members including yourself)`\n\n"
         f"Example:\n"
-        f"Team Name: Nexus Legends\n"
+        f"Team Name: Raze Nexus\n"
         f"Members: @user1 @user2 @user3\n\n"
         f"**Each team must have exactly {team_size} members.**\n"
-        f"Once you submit, your team will be registered and posted in <#{registered_channel.id}>."
-    )
+        )
+    
     embed = discord.Embed(
-        title=f"🏆 {tournament_name} Team Registration",
+        title=f"🏆 {tournament_name} Registered Teams",
         description=instructions,
         color=discord.Color.gold(),
         timestamp=datetime.utcnow()
     )
-    embed.set_footer(text="Nexus Esports | Team Registration")
+    embed.set_footer(text="Nexus Esports | Registered Teams")
     await post_channel.send(embed=embed)
     await interaction.response.send_message(
         embed=create_embed(
-            title="✅ Registration Started",
-            description=f"Registration message posted in {post_channel.mention}. Teams will be posted in {registered_channel.mention}.",
+            title="Thank you!",
+            description=f"posted in {post_channel.mention}. Teams will be posted in {registered_channel.mention}.",
             color=discord.Color.green()
         ),
         ephemeral=True
