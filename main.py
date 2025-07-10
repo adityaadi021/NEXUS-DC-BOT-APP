@@ -207,6 +207,7 @@ async def on_guild_join(guild):
     except Exception as e:
         print(f"❌ Failed to sync commands for {guild.name}: {e}")
 
+
 @bot.event
 async def on_guild_remove(guild):
     """Handle leaving servers"""
@@ -219,6 +220,79 @@ async def on_guild_remove(guild):
         del social_trackers[guild_id]
         save_social_trackers()
 
+
+async def generate_welcome_image(member: discord.Member):
+    try:
+        # Check if Pillow is installed
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            print("Pillow not installed, skipping image generation")
+            return None
+
+        # Get avatar with error handling
+        try:
+            avatar_asset = member.display_avatar.with_format('png').with_size(256)
+            avatar_bytes = await avatar_asset.read()
+        except Exception as e:
+            print(f"Couldn't fetch avatar: {e}")
+            return None
+
+        try:
+            # Create image with context manager for proper cleanup
+            with Image.new("RGBA", (400, 500), (255, 255, 255, 0)) as base:
+                with Image.open(io.BytesIO(avatar_bytes)) as avatar_img:
+                    avatar_img = avatar_img.convert("RGBA")
+                    
+                    # Resize and paste avatar
+                    avatar_size = 256
+                    avatar_pos = ((400 - avatar_size) // 2, 20)
+                    base.paste(avatar_img.resize((avatar_size, avatar_size)), 
+                              avatar_pos, 
+                              avatar_img.resize((avatar_size, avatar_size)))
+
+                draw = ImageDraw.Draw(base)
+                
+                # Font handling with better fallbacks
+                try:
+                    font_path = "arial.ttf"  # Try common fonts
+                    font_username = ImageFont.truetype(font_path, 36)
+                    font_member = ImageFont.truetype(font_path, 28)
+                except:
+                    # Use default font if specified font not found
+                    font_username = ImageFont.load_default(size=36)
+                    font_member = ImageFont.load_default(size=28)
+
+                # Draw username
+                username_text = str(member)
+                text_w, text_h = draw.textsize(username_text, font=font_username)
+                text_x = (400 - text_w) // 2
+                text_y = avatar_pos[1] + avatar_size + 20
+                draw.text((text_x, text_y), username_text, font=font_username, fill=(30, 30, 30, 255))
+
+                # Draw member count
+                member_no = sum(1 for m in member.guild.members if not m.bot)
+                member_text = f"you are our {member_no} member."
+                mem_w, mem_h = draw.textsize(member_text, font=font_member)
+                mem_x = (400 - mem_w) // 2
+                mem_y = text_y + text_h + 10
+                draw.text((mem_x, mem_y), member_text, font=font_member, fill=(120, 0, 0, 255))
+
+                # Save to bytes
+                img_bytes = io.BytesIO()
+                base.save(img_bytes, format="PNG")
+                img_bytes.seek(0)
+                return img_bytes
+
+        except Exception as e:
+            print(f"Error generating welcome image: {e}")
+            return None
+
+    except Exception as e:
+        print(f"Unexpected error in image generation: {e}")
+        return None
+    
+    
 @bot.event
 async def on_message(message: discord.Message):
     # Existing auto-reply to DMs
