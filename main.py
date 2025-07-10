@@ -237,55 +237,6 @@ async def on_guild_remove(guild):
         save_social_trackers()
 
 
-async def generate_welcome_card(member: discord.Member, banner_url: str):
-    try:
-        # Create blank image (800x400)
-        width, height = 800, 400
-        base = Image.new('RGB', (width, height), (40, 40, 40))
-        
-        # Download and paste banner
-        async with aiohttp.ClientSession() as session:
-            async with session.get(banner_url) as resp:
-                if resp.status == 200:
-                    banner_data = await resp.read()
-                    banner = Image.open(io.BytesIO(banner_data)).convert('RGBA')
-                    banner = banner.resize((width, 300))
-                    base.paste(banner, (0, 0), banner)
-        
-        # Get and paste avatar (circular)
-        avatar_url = str(member.display_avatar.with_format('png').with_size(256))
-        async with session.get(avatar_url) as resp:
-            if resp.status == 200:
-                avatar_data = await resp.read()
-                avatar = Image.open(io.BytesIO(avatar_data)).convert('RGBA')
-                
-                # Create circular mask
-                mask = Image.new('L', (200, 200), 0)
-                draw = ImageDraw.Draw(mask)
-                draw.ellipse((0, 0, 200, 200), fill=255)
-                
-                avatar = avatar.resize((200, 200))
-                base.paste(avatar, (300, 250), mask)
-        
-        # Add text
-        draw = ImageDraw.Draw(base)
-        try:
-            font = ImageFont.truetype("arial.ttf", 30)
-        except:
-            font = ImageFont.load_default()
-        
-        draw.text((400, 320), f"Welcome {member.name}!", font=font, fill="white", anchor="mm")
-        
-        # Save to bytes
-        img_bytes = io.BytesIO()
-        base.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-        return img_bytes
-        
-    except Exception as e:
-        print(f"Error creating welcome card: {e}")
-        return None
-    
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -1314,29 +1265,17 @@ async def on_member_join(member: discord.Member):
         # Get banner URL from config or use default
         banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
         
-        # Generate welcome card with avatar and banner
-        welcome_image = await generate_welcome_card(member, banner_url)
+        # Get welcome text from config or use default
+        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
         
-        if welcome_image:
-            # Create embed with welcome text
-            welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-            
-            file = discord.File(welcome_image, filename="welcome.png")
-            text = f"Hey {member.member}!,"
-            embed = discord.Embed(
-                description=f"Hey {member.mention}!\n```\n{welcome_text}\n```",
-                color=discord.Color(0x3e0000)
-            )
-            embed.set_image(url="attachment://welcome.png")
-            
-            await channel.send(file=file, embed=embed, text=text)
-        else:
-            # Fallback if image generation fails
-            await channel.send(
-                f"💕 Hey {member.mention}! Welcome to Nexus Esports! 💕\n\n"
-                "First click on Nexus Esports above\n"
-                "and select 'Show All Channels'"
-            )
+        # Create simple embed with welcome text and banner
+        embed = discord.Embed(
+            description=f"Hey {member.mention}!\n```\n{welcome_text}\n```",
+            color=discord.Color(0x3e0000)
+        )
+        embed.set_image(url=banner_url)
+        
+        await channel.send(embed=embed)
             
     except Exception as e:
         print(f"Error in welcome system: {e}")
