@@ -1230,11 +1230,11 @@ async def set_welcome(interaction: discord.Interaction,
     save_config()
     
     # Test the welcome message
-    embed = discord.Embed(
-        description=f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```",
-        color=discord.Color(0x3e0000)
-    )
-    embed.set_image(url=banner_url)
+    # embed = discord.Embed(
+    #     description=f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```",
+    #     color=discord.Color(0x3e0000)
+    # )
+    # embed.set_image(url=banner_url)
     
     await interaction.response.send_message(
         embed=create_embed(
@@ -1270,7 +1270,7 @@ async def on_member_join(member: discord.Member):
         
         # Create simple embed with welcome text and banner
         embed = discord.Embed(
-            description=f"Hey {member.mention}!\n```\n{welcome_text}\n```",
+            description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
             color=discord.Color(0x3e0000)
         )
         embed.set_image(url=banner_url)
