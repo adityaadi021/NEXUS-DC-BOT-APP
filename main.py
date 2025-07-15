@@ -1386,35 +1386,53 @@ async def on_member_join(member: discord.Member):
             try:
                 font = ImageFont.truetype("arial.ttf", 36)
             except Exception:
-                font = ImageFont.load_default()
-            # Draw username above member count
-            username = str(member.display_name)
-            user_w, user_h = draw.textsize(username, font=font)
-            draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
-            msg = f"You are our {member.guild.member_count}th member!"
-            msg_w, msg_h = draw.textsize(msg, font=font)
-            draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
-            buf = io.BytesIO()
-            bg.save(buf, format="PNG")
-            buf.seek(0)
-            file = discord.File(buf, filename="welcome.png")
-            embed = discord.Embed(
-                description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
-                color=discord.Color(0x3e0000)
-            )
-            embed.set_image(url="attachment://welcome.png")
-            await channel.send(embed=embed, file=file)
-            # Send the banner GIF as a separate message below
-            await channel.send(banner_url)
-        except Exception as e:
-            print(f"Error in welcome system: {e}")
-            # Fallback to current embed with banner
-            embed = discord.Embed(
-                description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
-                color=discord.Color(0x3e0000)
-            )
-            embed.set_image(url=banner_url)
-            await channel.send(embed=embed)
+
+    try:
+        # Get banner URL from config or use default
+        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        # Get welcome text from config or use default
+        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
+
+        # Generate custom welcome image (username above member count)
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+        avatar_asset = member.display_avatar.replace(format="png", size=128)
+        avatar_bytes = await avatar_asset.read()
+        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+        width, height = 800, 300
+        bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
+        draw = ImageDraw.Draw(bg)
+        avatar_size = 128
+        mask = Image.new("L", (avatar_size, avatar_size), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+        avatar_img = avatar_img.resize((avatar_size, avatar_size))
+        bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
+        try:
+            font = ImageFont.truetype("arial.ttf", 36)
+        except Exception:
+            font = ImageFont.load_default()
+        username = str(member.display_name)
+        user_w, user_h = draw.textsize(username, font=font)
+        draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
+        msg = f"You are our {member.guild.member_count}th member!"
+        msg_w, msg_h = draw.textsize(msg, font=font)
+        draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
+        buf = io.BytesIO()
+        bg.save(buf, format="PNG")
+        buf.seek(0)
+        file = discord.File(buf, filename="welcome.png")
+
+        # First embed: custom image and welcome text
+        embed1 = discord.Embed(
+            description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
+            color=discord.Color(0x3e0000)
+        )
+        embed1.set_image(url="attachment://welcome.png")
+        # Second embed: banner GIF
+        embed2 = discord.Embed()
+        embed2.set_image(url=banner_url)
+        await channel.send(embeds=[embed1, embed2], file=file)
 
         # Send DM welcome
         try:
@@ -1432,57 +1450,6 @@ async def on_member_join(member: discord.Member):
             print(f"Error sending welcome DM: {e}")
     except Exception as e:
         print(f"Error in on_member_join: {e}")
-
-
-
-
-@bot.tree.command(name="remove-social-tracker", description="Remove a social media tracker by its index")
-@app_commands.describe(index="The number of the tracker from the list (e.g., 1, 2, 3...)")
-async def remove_social_tracker(interaction: discord.Interaction, index: int):
-    if not interaction.user.guild_permissions.manage_guild:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="You need 'Manage Server' permission to remove trackers",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    guild_id = str(interaction.guild.id)
-    trackers = social_trackers.get(guild_id, [])
-    if not trackers:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ No Trackers",
-                description="There are no trackers to remove.",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    if index < 1 or index > len(trackers):
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Invalid Index",
-                description=f"Please enter a number between 1 and {len(trackers)}",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    removed = trackers.pop(index - 1)
-    if trackers:
-        social_trackers[guild_id] = trackers
-    else:
-        if guild_id in social_trackers:
-            del social_trackers[guild_id]
-    save_social_trackers()
-    await interaction.response.send_message(
-        embed=create_embed(
-            title="✅ Tracker Removed",
-            description=f"No longer tracking **{removed['account_name']}**",
-            color=discord.Color.green()
-        ),
-        ephemeral=True
-    )
 
 
 async def collect_teams(
