@@ -821,7 +821,7 @@ class WelcomeConfigModal(Modal, title='Configure Welcome'):
         required=True
     )
     dm_attachment_url = TextInput(
-        label='Welcome Image URL (optional)",
+        label='Welcome Image URL (optional)',
         placeholder='https://example.com/image.png',
         required=False
     )
