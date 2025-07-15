@@ -913,23 +913,61 @@ async def add_tournament_event(interaction: discord.Interaction):
             embed=create_embed("❌ Permission Denied", "You need 'Manage Server' permission", discord.Color.red()),
             ephemeral=True
         )
-        return
 
-    channels = interaction.guild.text_channels
-    await interaction.response.send_message(
-        content="Select a channel to begin:",
-        view=TournamentEventView(channels),
-        ephemeral=True
-    )
+    try:
+        # Get banner URL from config or use default
+        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        # Get welcome text from config or use default
+        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
 
-@bot.tree.command(name="list-tournament-events", description="List upcoming tournament events")
-async def list_tournament_events(interaction: discord.Interaction):
-    guild_id = str(interaction.guild.id)
-    events = event_schedule.get(guild_id, [])
+        # Try to generate a custom welcome image
+        import io
+        from PIL import Image, ImageDraw, ImageFont
+        avatar_asset = member.display_avatar.replace(format="png", size=128)
+        avatar_bytes = await avatar_asset.read()
+        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
 
-    if not events:
-        return await interaction.response.send_message(
-            embed=create_embed(
+        # Create dark background
+        width, height = 800, 300
+        bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
+        draw = ImageDraw.Draw(bg)
+
+        # Paste avatar in center (circle)
+        avatar_size = 128
+        mask = Image.new("L", (avatar_size, avatar_size), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+        avatar_img = avatar_img.resize((avatar_size, avatar_size))
+        bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
+
+        # Write custom message below avatar
+        try:
+            font = ImageFont.truetype("arial.ttf", 36)
+        except:
+            font = ImageFont.load_default()
+        msg = f"You are our {member.guild.member_count}th member!"
+        text_w, text_h = draw.textsize(msg, font=font)
+        draw.text(((width-text_w)//2, 40+avatar_size+20), msg, font=font, fill=(255,255,255,255))
+
+        # Save to buffer
+        buf = io.BytesIO()
+        bg.save(buf, format="PNG")
+        buf.seek(0)
+        file = discord.File(buf, filename="welcome.png")
+
+        # Embed with image and welcome text
+        embed = discord.Embed(
+            description=f"Hey {member.mention}!\n\n```
+        embed.set_image(url="attachment://welcome.png")
+        await channel.send(embed=embed, file=file)
+
+    except Exception as e:
+        print(f"Error in welcome system: {e}")
+        # Fallback to current embed with banner
+        embed = discord.Embed(
+            description=f"Hey {member.mention}!\n\n```
+        embed.set_image(url=banner_url)
+        await channel.send(embed=embed)
                 title="📅 Tournament Schedule",
                 description="No upcoming events found.",
                 color=discord.Color.blue()
@@ -1231,23 +1269,60 @@ async def set_welcome(interaction: discord.Interaction,
     })
     
     save_config()
-    
-    # Test the welcome message
-    # embed = discord.Embed(
-    #     description=f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```",
-    #     color=discord.Color(0x3e0000)
-    # )
-    # embed.set_image(url=banner_url)
-    
+
     await interaction.response.send_message(
         embed=create_embed(
             title="✅ Welcome System Configured",
-            description=f"Welcome messages will be sent to {welcome_channel.mention}",
+            description=f"Welcome messages will be sent to {welcome_channel.mention}\n\nAn example welcome message will be sent below.",
             color=discord.Color.green()
         ),
         ephemeral=True
     )
-    await welcome_channel.send(embed=embed)
+
+    # Send example welcome message in the selected channel
+    member = interaction.user
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+        avatar_asset = member.display_avatar.replace(format="png", size=128)
+        avatar_bytes = await avatar_asset.read()
+        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+        width, height = 800, 300
+        bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
+        draw = ImageDraw.Draw(bg)
+        avatar_size = 128
+        mask = Image.new("L", (avatar_size, avatar_size), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+        avatar_img = avatar_img.resize((avatar_size, avatar_size))
+        bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
+        try:
+            font = ImageFont.truetype("arial.ttf", 36)
+        except Exception:
+            font = ImageFont.load_default()
+        username = str(member.display_name)
+        user_w, user_h = draw.textsize(username, font=font)
+        draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
+        msg = f"You are our {welcome_channel.guild.member_count}th member!"
+        msg_w, msg_h = draw.textsize(msg, font=font)
+        draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
+        buf = io.BytesIO()
+        bg.save(buf, format="PNG")
+        buf.seek(0)
+        file = discord.File(buf, filename="welcome.png")
+        embed1 = discord.Embed(
+            description=(
+                f"Hey {member.mention}!\n\n"
+                f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```"
+            ),
+            color=discord.Color(0x3e0000)
+        )
+        embed1.set_image(url="attachment://welcome.png")
+        embed2 = discord.Embed()
+        embed2.set_image(url=banner_url or DEFAULT_BANNER_URL)
+        await welcome_channel.send(embeds=[embed1, embed2], file=file)
+    except Exception as e:
+        await welcome_channel.send(f"Failed to send example welcome message: {e}")
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1278,281 +1353,87 @@ async def on_member_join(member: discord.Member):
         )
         embed.set_image(url=banner_url)
         
-        await channel.send(embed=embed)
-            
-    except Exception as e:
-        print(f"Error in welcome system: {e}")
-        await channel.send(f"Hey {member.mention}! Welcome to the server!")
-        
-    # Send DM welcome
+    # Try to generate a custom welcome image with fallback
     try:
-        welcome_dm = guild_configs[guild_id].get("welcome_dm")
-        dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
-        
-        if welcome_dm:
-            embed = discord.Embed(
-                description=f"Hey {member.mention}!\n{welcome_dm}",
-                color=discord.Color(0x3e0000),
-                timestamp=datetime.utcnow()
-            )
-            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
-            if dm_attachment_url:
-                embed.set_image(url=dm_attachment_url)
-            if member.guild.icon:
-                embed.set_thumbnail(url=member.guild.icon.url)
-            await member.send(embed=embed)
-        else:
-            dm_message = (
-                f"Hey {member.mention}!\n\n"
-                "🔸Welcome to Nexus Esports!🔸\n\n"
-                "Thank you for joining our gaming community! We're excited to have you on board.\n\n"
-                "As mentioned in our welcome channel:\n"
-                "1. Click \"Nexus Esports\" at the top of the server\n"
-                "2. Select \"Show All Channels\" to access everything\n"
-                "3. Explore our community spaces!\n\n"
-                "Quick Start:\n"
-                "• Read #rules for guidelines\n"
-                "• Introduce yourself in #introductions\n"
-                "• Check #announcements for news\n"
-                "• Join tournaments in #events\n\n"
-                "Need help? Contact @acroneop or our mod team anytime!\n\n"
-                "We're glad you're here!💖 "
-            )
-            embed = discord.Embed(
-                description=dm_message,
-                color=discord.Color(0x3e0000),
-                timestamp=datetime.utcnow()
-            )
-            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
-            if member.guild.icon:
-                embed.set_thumbnail(url=member.guild.icon.url)
-            await member.send(embed=embed)
-    except discord.Forbidden:
-        pass
-    except Exception as e:
-        print(f"⚠️ Error sending welcome DM: {e}")
-
-# Social Media Tracking Commands
-@bot.tree.command(name="add-social-tracker", description="Add social media account tracking")
-@app_commands.describe(
-    platform="Select platform to track",
-    account_url="Full URL to the account",
-    post_channel="Channel to post updates"
-)
-@app_commands.choices(platform=[
-    app_commands.Choice(name="YouTube", value="youtube")
-])
-async def add_social_tracker(interaction: discord.Interaction, 
-                            platform: str, 
-                            account_url: str,
-                            post_channel: discord.TextChannel):
-    if not interaction.user.guild_permissions.manage_guild:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="You need 'Manage Server' permission to set up trackers",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    
-    guild_id = str(interaction.guild.id)
-    
-    if guild_id not in social_trackers:
-        social_trackers[guild_id] = []
-    
-    account_info = {}
+        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+        avatar_asset = member.display_avatar.replace(format="png", size=128)
+        avatar_bytes = await avatar_asset.read()
+        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+    # Try to generate a custom welcome image with fallback
     try:
-        if platform == "youtube":
-            if not YOUTUBE_API_KEY:
-                return await interaction.response.send_message(
-                    embed=create_embed(
-                        title="❌ YouTube Disabled",
-                        description="YouTube API key not configured",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-            
-            channel_id = None
-        
-            if "youtube.com/channel/" in account_url:
-                channel_id = account_url.split("youtube.com/channel/")[1].split("/")[0].split("?")[0]
-            elif "youtube.com/@" in account_url:
-                handle = account_url.split("youtube.com/@")[1].split("/")[0].split("?")[0]
-                
-                request = youtube_service.channels().list(
-                    part="id,snippet",
-                    forUsername=handle
-                )
-                response = request.execute()
-                
-                if not response.get('items'):
-                    return await interaction.response.send_message(
-                        embed=create_embed(
-                            title="❌ Channel Not Found",
-                            description="Couldn't find YouTube channel with that handle",
-                            color=discord.Color.red()
-                        ),
-                        ephemeral=True
-                    )
-                    
-                channel_id = response['items'][0]['id']
-            else:
-                return await interaction.response.send_message(
-                    embed=create_embed(
-                        title="❌ Invalid URL",
-                        description="Please provide a valid YouTube channel URL",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-        
-            search_req = youtube_service.search().list(
-                part="id",
-                channelId=channel_id,
-                order="date",
-                maxResults=1,
-                type="video"
-            )
-            search_res = search_req.execute()
-            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
-        
-            search_live = youtube_service.search().list(
-                part="id",
-                channelId=channel_id,
-                eventType="live",
-                type="video",
-                maxResults=1
-            ).execute()
-            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
-        
-            request = youtube_service.channels().list(
-                part='statistics,snippet',
-                id=channel_id
-            )
-            response = request.execute()
-            
-            if not response.get('items'):
-                return await interaction.response.send_message(
-                    embed=create_embed(
-                        title="❌ Channel Not Found",
-                        description="Couldn't find YouTube channel",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-            
-            stats = response['items'][0]['statistics']
-            account_info = {
-                'platform': platform,
-                'url': account_url,
-                'channel_id': channel_id,
-                'account_name': response['items'][0]['snippet']['title'],
-                'last_count': int(stats['subscriberCount']),
-                'last_video_id': latest_video_id,
-                'last_live_video_id': latest_live_id,
-                'post_channel': str(post_channel.id)
-            }
-
-    except HttpError as e:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ YouTube API Error",
-                description=f"YouTube API error: {str(e)}",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    except Exception as e:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Setup Failed",
-                description=f"Error: {str(e)}",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    
-    social_trackers[guild_id].append(account_info)
-    save_social_trackers()
-    
-    await interaction.response.send_message(
-        embed=create_embed(
-            title="✅ Tracker Added",
-            description=(
-                f"Now tracking **{account_info['account_name']}** on {platform.capitalize()}!\n"
-                f"Updates will be posted in {post_channel.mention}"
-            ),
-            color=discord.Color.green()
-        ),
-        ephemeral=True
-    )
-
-@bot.tree.command(name="list-social-trackers", description="Show active social media trackers")
-async def list_social_trackers(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_guild:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="You need 'Manage Server' permission",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-    
-    guild_id = str(interaction.guild.id)
-    trackers = social_trackers.get(guild_id, [])
-    
-    # Debug output to verify loaded data
-    print(f"[DEBUG] Trackers for {guild_id}: {json.dumps(trackers, indent=2)}")
-    
-    if not trackers:
-        return await interaction.response.send_message(
-            embed=create_embed(
-                title="📊 Social Trackers",
-                description="No active trackers configured",
-                color=discord.Color.blue()
-            ),
-            ephemeral=True
-        )
-    
-    embed = discord.Embed(
-        title="📊 Active Social Trackers",
-        color=discord.Color.blue(),
-        timestamp=datetime.utcnow()
-    )
-    
-    for i, tracker in enumerate(trackers, 1):
+        # Get banner URL from config or use default
+        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        # Get welcome text from config or use default
+        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
         try:
-            channel_id = tracker.get('post_channel')
-            channel = interaction.guild.get_channel(int(channel_id)) if channel_id else None
-            
-            count = tracker.get('last_count', 'N/A')
-            if isinstance(count, int):
-                count = f"{count:,}"
-                
-            # Handle channel display
-            channel_display = channel.mention if channel else f"⚠️ Channel not found (ID: {channel_id})"
-            
-            # Add last update time if available
-            last_update = ""
-            if 'last_update_time' in tracker:
-                last_update = f"\n**Last Update:** <t:{int(tracker['last_update_time'])}:R>"
-            
-            embed.add_field(
-                name=f"{i}. {tracker['account_name']}",
-                value=(
-                    f"**Platform:** {tracker['platform'].capitalize()}\n"
-                    f"**Channel:** {channel_display}\n"
-                    f"**Current Count:** {count}"
-                    f"{last_update}\n"
-                    f"[View Profile]({tracker['url']})"
-                ),
-                inline=False
+            from PIL import Image, ImageDraw, ImageFont
+            import io
+            avatar_asset = member.display_avatar.replace(format="png", size=128)
+            avatar_bytes = await avatar_asset.read()
+            avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+            width, height = 800, 300
+            bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
+            draw = ImageDraw.Draw(bg)
+            avatar_size = 128
+            mask = Image.new("L", (avatar_size, avatar_size), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+            avatar_img = avatar_img.resize((avatar_size, avatar_size))
+            bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
+            try:
+                font = ImageFont.truetype("arial.ttf", 36)
+            except Exception:
+                font = ImageFont.load_default()
+            # Draw username above member count
+            username = str(member.display_name)
+            user_w, user_h = draw.textsize(username, font=font)
+            draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
+            msg = f"You are our {member.guild.member_count}th member!"
+            msg_w, msg_h = draw.textsize(msg, font=font)
+            draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
+            buf = io.BytesIO()
+            bg.save(buf, format="PNG")
+            buf.seek(0)
+            file = discord.File(buf, filename="welcome.png")
+            embed = discord.Embed(
+                description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
+                color=discord.Color(0x3e0000)
             )
+            embed.set_image(url="attachment://welcome.png")
+            await channel.send(embed=embed, file=file)
+            # Send the banner GIF as a separate message below
+            await channel.send(banner_url)
         except Exception as e:
-            print(f"Error processing tracker {i}: {e}")
+            print(f"Error in welcome system: {e}")
+            # Fallback to current embed with banner
+            embed = discord.Embed(
+                description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
+                color=discord.Color(0x3e0000)
+            )
+            embed.set_image(url=banner_url)
+            await channel.send(embed=embed)
+
+        # Send DM welcome
+        try:
+            welcome_dm = guild_configs[guild_id].get("welcome_dm")
+            dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
+            if welcome_dm:
+                embed = discord.Embed(
+                    description=f"Hey {member.mention}!\n{welcome_dm}",
+                    color=discord.Color(0x3e0000)
+                )
+                if dm_attachment_url:
+                    embed.set_image(url=dm_attachment_url)
+                await member.send(embed=embed)
+        except Exception as e:
+            print(f"Error sending welcome DM: {e}")
+    except Exception as e:
+        print(f"Error in on_member_join: {e}")
+
+
 
 
 @bot.tree.command(name="remove-social-tracker", description="Remove a social media tracker by its index")
