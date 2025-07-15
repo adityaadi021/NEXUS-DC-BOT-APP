@@ -164,6 +164,8 @@ and get yourself ✅verified by clicking on the
 
 DEFAULT_BANNER_URL = "https://cdn.discordapp.com/attachments/1378018158010695722/1378426905585520901/standard_2.gif"
 
+
+
 # Bot events
 @bot.event
 async def on_ready():
@@ -233,6 +235,8 @@ async def on_guild_remove(guild):
     if guild_id in social_trackers:
         del social_trackers[guild_id]
         save_social_trackers()
+
+
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -414,118 +418,23 @@ async def on_message(message: discord.Message):
 # Background tasks
 async def check_social_updates():
     """Check all social trackers for updates"""
-    # Prioritize live stream checks, then other updates, and batch API calls for quota efficiency
-    youtube_trackers = []
     for guild_id, trackers in social_trackers.items():
         for tracker in trackers:
-            if tracker['platform'] == 'youtube':
-                youtube_trackers.append((guild_id, tracker))
-
-    # Group by channel_id to avoid duplicate API calls
-    channel_map = {}
-    for guild_id, tracker in youtube_trackers:
-        cid = tracker['channel_id']
-        if cid not in channel_map:
-            channel_map[cid] = []
-        channel_map[cid].append((guild_id, tracker))
-
-    # 1. Check live streams for all channels first (priority)
-    for channel_id, tracker_list in channel_map.items():
-        try:
-            # Only one API call per channel for live
-            live_request = youtube_service.search().list(
-                part="snippet",
-                channelId=channel_id,
-                eventType="live",
-                type="video",
-                maxResults=1
-            )
-            live_response = live_request.execute()
-
-            if live_response.get('items'):
-                live_video = live_response['items'][0]
-                live_video_id = live_video['id']['videoId']
-                live_title = live_video['snippet']['title']
-                live_thumb = live_video['snippet']['thumbnails']['high']['url']
-                for guild_id, tracker in tracker_list:
-                    last_live_notify = tracker.get('last_live_notify_time', 0)
-                    should_notify = (
-                        tracker.get('last_live_video_id') != live_video_id or 
-                        (datetime.utcnow().timestamp() - last_live_notify) > 21600  # 6 hours
-                    )
-                    if should_notify:
-                        embed = discord.Embed(
-                            title=f"🔴 {tracker['account_name']} is LIVE!",
-                            url=f"https://youtu.be/{live_video_id}",
-                            description=f"{live_title}",
-                            color=discord.Color.red(),
-                            timestamp=datetime.utcnow()
-                        )
-                        embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
-                        embed.set_image(url=live_thumb)
-                        channel = bot.get_channel(int(tracker['post_channel']))
-                        if channel:
-                            await channel.send(
-                                embed=embed,
-                                allowed_mentions=discord.AllowedMentions(everyone=True)
-                            )
-                        tracker['last_live_video_id'] = live_video_id
-                        tracker['last_live_notify_time'] = datetime.utcnow().timestamp()
-
-    # 2. Check for new videos (less frequent)
-    for channel_id, tracker_list in channel_map.items():
-        try:
-            # One API call per channel for videos
-            videos_request = youtube_service.search().list(
-                part="snippet",
-                channelId=channel_id,
-                type="video",
-                order="date",
-                maxResults=1
-            )
-            videos_response = videos_request.execute()
-
-            if videos_response.get('items'):
-                latest_video = videos_response['items'][0]
-                video_id = latest_video['id']['videoId']
-                publish_time = latest_video['snippet']['publishedAt']
-                for guild_id, tracker in tracker_list:
-                    video_time = datetime.fromisoformat(publish_time.replace('Z',''))
-                    if (datetime.utcnow() - video_time) < timedelta(hours=12) and tracker.get("last_video_id") != video_id:
-                        embed = discord.Embed(
-                            title=f"📺 New YouTube upload: {latest_video['snippet']['title']}",
-                            url=f"https://youtu.be/{video_id}",
-                            description=f"A new video was uploaded on {tracker['account_name']}!",
-                            color=discord.Color.red(),
-                            timestamp=datetime.utcnow()
-                        )
-                        embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
-                        embed.add_field(name="Published", value=f"<t:{int(video_time.timestamp())}:R>", inline=True)
-                        embed.set_image(url=latest_video['snippet']['thumbnails']['high']['url'])
-                        channel = bot.get_channel(int(tracker['post_channel']))
-                        if channel:
-                            await channel.send(embed=embed)
-                        tracker['last_video_id'] = video_id
-
-                tracker['last_update_time'] = datetime.utcnow().timestamp()
-                save_social_trackers()
-        except HttpError as e:
-            if e.resp.status == 403:
-                print(f"[YouTube] API quota exceeded for channel {channel_id}")
-            else:
-                print(f"[YouTube] API error: {e}")
-        except Exception as e:
-            print(f"[YouTube] Error checking channel {channel_id}: {e}")
+            try:
+                if tracker['platform'] == 'youtube':
+                    await check_youtube_update(guild_id, tracker)
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"⚠️ Error in social update: {e}")
 
 async def social_update_task():
     await bot.wait_until_ready()
-    # Run every 2 minutes for near-minimum delay, but quota-friendly
     while not bot.is_closed():
         try:
             await check_social_updates()
         except Exception as e:
             print(f"⚠️ Social update error: {e}")
-        await asyncio.sleep(120)
+        await asyncio.sleep(300)
 
 async def event_schedule_notifier():
     await bot.wait_until_ready()
@@ -572,8 +481,146 @@ async def event_schedule_notifier():
         await asyncio.sleep(60)
 
 async def check_youtube_update(guild_id, tracker):
-    # Deprecated: now handled in batch in check_social_updates for quota efficiency
-    pass
+    if not youtube_service:
+        return
+
+    try:
+        # First get channel info
+        request = youtube_service.channels().list(
+            part='statistics,snippet',
+            id=tracker['channel_id']
+        )
+        response = request.execute()
+
+        if not response.get('items'):
+            print(f"[YouTube] No channel found for ID: {tracker['channel_id']}")
+            return
+
+        channel_info = response['items'][0]
+        stats = channel_info['statistics']
+        snippet = channel_info['snippet']
+        channel_name = snippet['title']
+        
+        # Update last check time
+        tracker['last_check_time'] = datetime.utcnow().timestamp()
+        
+        # Handle subscriber count
+        sub_count_raw = stats.get('subscriberCount')
+        current_subs = tracker.get('last_count', 0)
+        
+        if sub_count_raw and sub_count_raw.isdigit():
+            current_subs = int(sub_count_raw)
+        
+        # Subscriber milestone check
+        last_subs = tracker.get('last_count', 0)
+        if isinstance(last_subs, int) and current_subs > last_subs:
+            tracker['last_count'] = current_subs
+            channel = bot.get_channel(int(tracker['post_channel']))
+            if channel:
+                embed = discord.Embed(
+                    title="🎉 YouTube Milestone Reached!",
+                    description=(
+                        f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
+                        f"`+{current_subs - last_subs:,}` since last update"
+                    ),
+                    color=discord.Color.red(),
+                    url=tracker['url']
+                )
+                embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
+                embed.set_footer(text="Nexus Esports Social Tracker")
+                await channel.send(embed=embed)
+
+        # Video upload detection (only notify for videos <24 hours old)
+        video_request = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            order="date",
+            maxResults=1,
+            type="video"
+        )
+        video_response = video_request.execute()
+        
+        if video_response.get('items'):
+            latest_video = video_response['items'][0]
+            video_id = latest_video['id']['videoId']
+            publish_time = latest_video['snippet']['publishedAt']
+            video_time = datetime.fromisoformat(publish_time.replace('Z',''))
+            
+            # Only notify if video is <24 hours old and not previously notified
+            if (datetime.utcnow() - video_time) < timedelta(hours=24) and tracker.get("last_video_id") != video_id:
+                embed = discord.Embed(
+                    title=f"📺 New YouTube Video: {latest_video['snippet']['title']}",
+                    url=f"https://youtu.be/{video_id}",
+                    description=f"A new video was uploaded on {tracker['account_name']}!",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                embed.add_field(name="Published", value=f"<t:{int(video_time.timestamp())}:R>", inline=True)
+                embed.set_image(url=latest_video['snippet']['thumbnails']['high']['url'])
+                
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    await channel.send(embed=embed)
+                
+                tracker['last_video_id'] = video_id
+
+        # Live stream detection with @everyone ping
+        live_request = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            eventType="live",
+            type="video",
+            maxResults=1
+        )
+        live_response = live_request.execute()
+        
+        if live_response.get('items'):
+            live_video = live_response['items'][0]
+            live_video_id = live_video['id']['videoId']
+            live_title = live_video['snippet']['title']
+            live_thumb = live_video['snippet']['thumbnails']['high']['url']
+            
+            # Check if this is a new stream or we should re-notify (every 6 hours)
+            last_live_notify = tracker.get('last_live_notify_time', 0)
+            should_notify = (
+                tracker.get('last_live_video_id') != live_video_id or 
+                (datetime.utcnow().timestamp() - last_live_notify) > 21600  # 6 hours
+            )
+            
+            if should_notify:
+                embed = discord.Embed(
+                    title=f"🔴 {tracker['account_name']} is LIVE!",
+                    url=f"https://youtu.be/{live_video_id}",
+                    description=f"{live_title}",
+                    color=discord.Color.red(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                embed.set_image(url=live_thumb)
+                
+                channel = bot.get_channel(int(tracker['post_channel']))
+                if channel:
+                    await channel.send(
+                        content="@everyone",  # Ping everyone for live streams
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions(everyone=True)
+                    )
+                
+                tracker['last_live_video_id'] = live_video_id
+                tracker['last_live_notify_time'] = datetime.utcnow().timestamp()
+
+        # Save updates
+        tracker['last_update_time'] = datetime.utcnow().timestamp()
+        save_social_trackers()
+
+    except HttpError as e:
+        if e.resp.status == 403:
+            print(f"[YouTube] API quota exceeded for {tracker['account_name']}")
+        else:
+            print(f"[YouTube] API error: {e}")
+    except Exception as e:
+        print(f"[YouTube] Error checking {tracker['account_name']}: {e}")
 
 # Load configs on startup
 load_config()
@@ -757,7 +804,7 @@ class DMModal(Modal, title='Send Direct Message'):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            formatted_content = (
+            formatted_message = (
                 f"**📩 Message from {interaction.guild.name}:**\n"
                 f"```\n{self.message.value}\n```\n\n"
                 "For any queries or further support, contact @acroneop in our Official Server:\n"
@@ -765,10 +812,10 @@ class DMModal(Modal, title='Send Direct Message'):
             )
             
             if self.attachment:
-                formatted_content += "\n\n📎 *Attachment included*"
+                formatted_message += "\n\n📎 *Attachment included*"
             
             embed = discord.Embed(
-                description=formatted_content,
+                description=formatted_message,
                 color=discord.Color(0x3e0000),
                 timestamp=datetime.utcnow()
             )
@@ -865,37 +912,51 @@ async def add_tournament_event(interaction: discord.Interaction):
         )
         return
 
-    try:
-        channels = [ch for ch in interaction.guild.text_channels if ch.permissions_for(interaction.guild.me).send_messages]
-        if not channels:
-            return await interaction.response.send_message(
-                embed=create_embed(
-                    title="❌ No Available Channels",
-                    description="I don't have permission to send messages in any channels!",
-                    color=discord.Color.red()
-                ),
-                ephemeral=True
-            )
-        
-        view = TournamentEventView(channels)
-        await interaction.response.send_message(
+    channels = interaction.guild.text_channels
+    await interaction.response.send_message(
+        content="Select a channel to begin:",
+        view=TournamentEventView(channels),
+        ephemeral=True
+    )
+
+@bot.tree.command(name="list-tournament-events", description="List upcoming tournament events")
+async def list_tournament_events(interaction: discord.Interaction):
+    guild_id = str(interaction.guild.id)
+    events = event_schedule.get(guild_id, [])
+
+    if not events:
+        return await interaction.response.send_message(
             embed=create_embed(
-                title="📅 Schedule Tournament Event",
-                description="Select a channel to post the event notification:",
+                title="📅 Tournament Schedule",
+                description="No upcoming events found.",
                 color=discord.Color.blue()
             ),
-            view=view,
             ephemeral=True
         )
-    except Exception as e:
-        await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Error",
-                description=f"Failed to start event scheduling: {e}",
-                color=discord.Color.red()
+
+    embed = discord.Embed(
+        title="📅 Upcoming Tournament Events",
+        color=discord.Color.orange(),
+        timestamp=datetime.utcnow()
+    )
+
+    for i, event in enumerate(events, 1):
+        event_time = datetime.fromisoformat(event["time"]) + timedelta(hours=5, minutes=30)
+        ping_role = f"<@&{event['ping_role_id']}>" if event.get("ping_role_id") else "None"
+        embed.add_field(
+            name=f"{i}. {event['title']}",
+            value=(
+                f"📝 {event['description']}\n"
+                f"📅 **Time:** <t:{int(event_time.timestamp())}:F>\n"
+                f"📢 **Channel:** <#{event['channel_id']}>\n"
+                f"👥 **Ping:** {ping_role}\n"
+                f"🔔 **Notified:** {'✅' if event.get('notified') else '❌'}"
             ),
-            ephemeral=True
+            inline=False
         )
+
+    embed.set_footer(text="Nexus Esports | Scheduled Tournament Events")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="remove-tournament-event", description="Remove a scheduled tournament event")
 @app_commands.describe(index="The number of the event from the list (e.g., 1, 2, 3...)")
@@ -1167,60 +1228,23 @@ async def set_welcome(interaction: discord.Interaction,
     })
     
     save_config()
-
+    
+    # Test the welcome message
+    # embed = discord.Embed(
+    #     description=f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```",
+    #     color=discord.Color(0x3e0000)
+    # )
+    # embed.set_image(url=banner_url)
+    
     await interaction.response.send_message(
         embed=create_embed(
             title="✅ Welcome System Configured",
-            description=f"Welcome messages will be sent to {welcome_channel.mention}\n\nAn example welcome message will be sent below.",
+            description=f"Welcome messages will be sent to {welcome_channel.mention}",
             color=discord.Color.green()
         ),
         ephemeral=True
     )
-
-    # Send example welcome message in the selected channel
-    member = interaction.user
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        import io
-        avatar_asset = member.display_avatar.replace(format="png", size=128)
-        avatar_bytes = await avatar_asset.read()
-        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-        width, height = 800, 300
-        bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
-        draw = ImageDraw.Draw(bg)
-        avatar_size = 128
-        mask = Image.new("L", (avatar_size, avatar_size), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
-        avatar_img = avatar_img.resize((avatar_size, avatar_size))
-        bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
-        try:
-            font = ImageFont.truetype("arial.ttf", 36)
-        except Exception:
-            font = ImageFont.load_default()
-        username = str(member.display_name)
-        user_w, user_h = draw.textsize(username, font=font)
-        draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
-        msg = f"You are our {welcome_channel.guild.member_count}th member!"
-        msg_w, msg_h = draw.textsize(msg, font=font)
-        draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
-        buf = io.BytesIO()
-        bg.save(buf, format="PNG")
-        buf.seek(0)
-        file = discord.File(buf, filename="welcome.png")
-        embed1 = discord.Embed(
-            description=(
-                f"Hey {member.mention}!\n\n"
-                f"```\n{welcome_message or DEFAULT_WELCOME_MESSAGE}\n```"
-            ),
-            color=discord.Color(0x3e0000)
-        )
-        embed1.set_image(url="attachment://welcome.png")
-        embed2 = discord.Embed()
-        embed2.set_image(url=banner_url or DEFAULT_BANNER_URL)
-        await welcome_channel.send(embeds=[embed1, embed2], file=file)
-    except Exception as e:
-        await welcome_channel.send(f"Failed to send example welcome message: {e}")
+    await welcome_channel.send(embed=embed)
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1240,65 +1264,409 @@ async def on_member_join(member: discord.Member):
     try:
         # Get banner URL from config or use default
         banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        
         # Get welcome text from config or use default
         welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-        # Generate custom welcome image (username above member count)
-        from PIL import Image, ImageDraw, ImageFont
-        import io
-        avatar_asset = member.display_avatar.replace(format="png", size=128)
-        avatar_bytes = await avatar_asset.read()
-        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-        width, height = 800, 300
-        bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
-        draw = ImageDraw.Draw(bg)
-        avatar_size = 128
-        mask = Image.new("L", (avatar_size, avatar_size), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
-        avatar_img = avatar_img.resize((avatar_size, avatar_size))
-        bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
-        try:
-            font = ImageFont.truetype("arial.ttf", 36)
-        except Exception:
-            font = ImageFont.load_default()
-        username = str(member.display_name)
-        user_w, user_h = draw.textsize(username, font=font)
-        draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
-        msg = f"You are our {member.guild.member_count}th member!"
-        msg_w, msg_h = draw.textsize(msg, font=font)
-        draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
-        buf = io.BytesIO()
-        bg.save(buf, format="PNG")
-        buf.seek(0)
-        file = discord.File(buf, filename="welcome.png")
-
-        # First embed: custom image and welcome text
-        embed1 = discord.Embed(
+        
+        # Create simple embed with welcome text and banner
+        embed = discord.Embed(
             description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
             color=discord.Color(0x3e0000)
         )
-        embed1.set_image(url="attachment://welcome.png")
-        # Second embed: banner GIF
-        embed2 = discord.Embed()
-        embed2.set_image(url=banner_url)
-        await channel.send(embeds=[embed1, embed2], file=file)
-
-        # Send DM welcome
-        try:
-            welcome_dm = guild_configs[guild_id].get("welcome_dm")
-            dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
-            if welcome_dm:
-                embed = discord.Embed(
-                    description=f"Hey {member.mention}!\n{welcome_dm}",
-                    color=discord.Color(0x3e0000)
-                )
-                if dm_attachment_url:
-                    embed.set_image(url=dm_attachment_url)
-                await member.send(embed=embed)
-        except Exception as e:
-            print(f"Error sending welcome DM: {e}")
+        embed.set_image(url=banner_url)
+        
+        await channel.send(embed=embed)
+            
     except Exception as e:
-        print(f"Error in on_member_join: {e}")
+        print(f"Error in welcome system: {e}")
+        await channel.send(f"Hey {member.mention}! Welcome to the server!")
+        
+    # Send DM welcome
+    try:
+        welcome_dm = guild_configs[guild_id].get("welcome_dm")
+        dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
+        
+        if welcome_dm:
+            embed = discord.Embed(
+                description=f"Hey {member.mention}!\n{welcome_dm}",
+                color=discord.Color(0x3e0000),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+            if dm_attachment_url:
+                embed.set_image(url=dm_attachment_url)
+            if member.guild.icon:
+                embed.set_thumbnail(url=member.guild.icon.url)
+            await member.send(embed=embed)
+        else:
+            dm_message = (
+                f"Hey {member.mention}!\n\n"
+                "🔸Welcome to Nexus Esports!🔸\n\n"
+                "Thank you for joining our gaming community! We're excited to have you on board.\n\n"
+                "As mentioned in our welcome channel:\n"
+                "1. Click \"Nexus Esports\" at the top of the server\n"
+                "2. Select \"Show All Channels\" to access everything\n"
+                "3. Explore our community spaces!\n\n"
+                "Quick Start:\n"
+                "• Read #rules for guidelines\n"
+                "• Introduce yourself in #introductions\n"
+                "• Check #announcements for news\n"
+                "• Join tournaments in #events\n\n"
+                "Need help? Contact @acroneop or our mod team anytime!\n\n"
+                "We're glad you're here!💖 "
+            )
+            embed = discord.Embed(
+                description=dm_message,
+                color=discord.Color(0x3e0000),
+                timestamp=datetime.utcnow()
+            )
+            embed.set_footer(text="Nexus Esports Official | DM Moderators or Officials for any Query!")
+            if member.guild.icon:
+                embed.set_thumbnail(url=member.guild.icon.url)
+            await member.send(embed=embed)
+    except discord.Forbidden:
+        pass
+    except Exception as e:
+        print(f"⚠️ Error sending welcome DM: {e}")
+
+# Social Media Tracking Commands
+@bot.tree.command(name="add-social-tracker", description="Add social media account tracking")
+@app_commands.describe(
+    platform="Select platform to track",
+    account_url="Full URL to the account",
+    post_channel="Channel to post updates"
+)
+@app_commands.choices(platform=[
+    app_commands.Choice(name="YouTube", value="youtube")
+])
+async def add_social_tracker(interaction: discord.Interaction, 
+                            platform: str, 
+                            account_url: str,
+                            post_channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.manage_guild:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Server' permission to set up trackers",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    
+    guild_id = str(interaction.guild.id)
+    
+    if guild_id not in social_trackers:
+        social_trackers[guild_id] = []
+    
+    account_info = {}
+    try:
+        if platform == "youtube":
+            if not YOUTUBE_API_KEY:
+                return await interaction.response.send_message(
+                    embed=create_embed(
+                        title="❌ YouTube Disabled",
+                        description="YouTube API key not configured",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+            
+            channel_id = None
+        
+            if "youtube.com/channel/" in account_url:
+                channel_id = account_url.split("youtube.com/channel/")[1].split("/")[0].split("?")[0]
+            elif "youtube.com/@" in account_url:
+                handle = account_url.split("youtube.com/@")[1].split("/")[0].split("?")[0]
+                
+                request = youtube_service.channels().list(
+                    part="id,snippet",
+                    forUsername=handle
+                )
+                response = request.execute()
+                
+                if not response.get('items'):
+                    return await interaction.response.send_message(
+                        embed=create_embed(
+                            title="❌ Channel Not Found",
+                            description="Couldn't find YouTube channel with that handle",
+                            color=discord.Color.red()
+                        ),
+                        ephemeral=True
+                    )
+                    
+                channel_id = response['items'][0]['id']
+            else:
+                return await interaction.response.send_message(
+                    embed=create_embed(
+                        title="❌ Invalid URL",
+                        description="Please provide a valid YouTube channel URL",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+        
+            search_req = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                order="date",
+                maxResults=1,
+                type="video"
+            )
+            search_res = search_req.execute()
+            latest_video_id = search_res['items'][0]['id']['videoId'] if search_res.get('items') else None
+        
+            search_live = youtube_service.search().list(
+                part="id",
+                channelId=channel_id,
+                eventType="live",
+                type="video",
+                maxResults=1
+            ).execute()
+            latest_live_id = search_live['items'][0]['id']['videoId'] if search_live.get('items') else None
+        
+            request = youtube_service.channels().list(
+                part='statistics,snippet',
+                id=channel_id
+            )
+            response = request.execute()
+            
+            if not response.get('items'):
+                return await interaction.response.send_message(
+                    embed=create_embed(
+                        title="❌ Channel Not Found",
+                        description="Couldn't find YouTube channel",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+            
+            stats = response['items'][0]['statistics']
+            account_info = {
+                'platform': platform,
+                'url': account_url,
+                'channel_id': channel_id,
+                'account_name': response['items'][0]['snippet']['title'],
+                'last_count': int(stats['subscriberCount']),
+                'last_video_id': latest_video_id,
+                'last_live_video_id': latest_live_id,
+                'post_channel': str(post_channel.id)
+            }
+
+    except HttpError as e:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ YouTube API Error",
+                description=f"YouTube API error: {str(e)}",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    except Exception as e:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Setup Failed",
+                description=f"Error: {str(e)}",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    
+    social_trackers[guild_id].append(account_info)
+    save_social_trackers()
+    
+    await interaction.response.send_message(
+        embed=create_embed(
+            title="✅ Tracker Added",
+            description=(
+                f"Now tracking **{account_info['account_name']}** on {platform.capitalize()}!\n"
+                f"Updates will be posted in {post_channel.mention}"
+            ),
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
+
+@bot.tree.command(name="list-social-trackers", description="Show active social media trackers")
+async def list_social_trackers(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_guild:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Server' permission",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    
+    guild_id = str(interaction.guild.id)
+    trackers = social_trackers.get(guild_id, [])
+    
+    # Debug output to verify loaded data
+    print(f"[DEBUG] Trackers for {guild_id}: {json.dumps(trackers, indent=2)}")
+    
+    if not trackers:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="📊 Social Trackers",
+                description="No active trackers configured",
+                color=discord.Color.blue()
+            ),
+            ephemeral=True
+        )
+    
+    embed = discord.Embed(
+        title="📊 Active Social Trackers",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+    
+    for i, tracker in enumerate(trackers, 1):
+        try:
+            channel_id = tracker.get('post_channel')
+            channel = interaction.guild.get_channel(int(channel_id)) if channel_id else None
+            
+            count = tracker.get('last_count', 'N/A')
+            if isinstance(count, int):
+                count = f"{count:,}"
+                
+            # Handle channel display
+            channel_display = channel.mention if channel else f"⚠️ Channel not found (ID: {channel_id})"
+            
+            # Add last update time if available
+            last_update = ""
+            if 'last_update_time' in tracker:
+                last_update = f"\n**Last Update:** <t:{int(tracker['last_update_time'])}:R>"
+            
+            embed.add_field(
+                name=f"{i}. {tracker['account_name']}",
+                value=(
+                    f"**Platform:** {tracker['platform'].capitalize()}\n"
+                    f"**Channel:** {channel_display}\n"
+                    f"**Current Count:** {count}"
+                    f"{last_update}\n"
+                    f"[View Profile]({tracker['url']})"
+                ),
+                inline=False
+            )
+        except Exception as e:
+            print(f"Error processing tracker {i}: {e}")
+            continue
+    
+    embed.set_footer(text="Nexus Esports Social Tracker")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="remove-social-tracker", description="Remove a social media tracker")
+@app_commands.describe(index="Tracker number to remove (see /list-social-trackers)")
+async def remove_social_tracker(interaction: discord.Interaction, index: int):
+    if not interaction.user.guild_permissions.manage_guild:
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Server' permission",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    
+    guild_id = str(interaction.guild.id)
+    trackers = social_trackers.get(guild_id, [])
+    
+    if index < 1 or index > len(trackers):
+        return await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Invalid Index",
+                description="Please use a valid tracker number",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    
+    removed = trackers.pop(index-1)
+    if trackers:
+        social_trackers[guild_id] = trackers
+    else:
+        del social_trackers[guild_id]
+    save_social_trackers()
+    
+    await interaction.response.send_message(
+        embed=create_embed(
+            title="✅ Tracker Removed",
+            description=f"No longer tracking **{removed['account_name']}**",
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
+
+# Team Registration Commands
+@bot.tree.command(name="collect-teams", description="Start team registration for a tournament")
+@app_commands.describe(
+    team_size="Number of members per team",
+    tournament_name="Name of the tournament",
+    post_channel="Channel to post the registration message",
+    registered_channel="Channel to post registered teams",
+    team_role="Role to assign to team members",
+    max_slots="Maximum number of teams allowed to register"
+)
+async def collect_teams(
+    interaction: discord.Interaction,
+    team_size: int,
+    tournament_name: str,
+    post_channel: discord.TextChannel,
+    registered_channel: discord.TextChannel,
+    team_role: discord.Role,
+    max_slots: int
+):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message(
+            embed=create_embed(
+                title="❌ Permission Denied",
+                description="You need 'Manage Server' permission to use this command.",
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        return
+
+    guild_id = str(interaction.guild.id)
+    active_team_collections[guild_id] = {
+        "team_size": team_size,
+        "tournament_name": tournament_name,
+        "post_channel_id": post_channel.id,
+        "registered_channel_id": registered_channel.id,
+        "team_role_id": team_role.id,
+        "creator_id": interaction.user.id,
+        "max_slots": max_slots,
+        "registered_teams": []
+    }
+
+    instructions = (
+        f"**Please provide your team information for `{tournament_name}`!**\n\n"
+        f"Reply in this channel with:\n"
+        f"`Team Name: <your team name>`\n"
+        f"`Members: @member1 @member2 ... (mention {team_size} members including yourself)`\n\n"
+        f"Example:\n"
+        f"Team Name: Raze Nexus\n"
+        f"Members: @user1 @user2 @user3\n\n"
+        f"**Each team must have exactly {team_size} members.**\n"
+        f"**Maximum slots:** {max_slots}"
+    )
+    
+    embed = discord.Embed(
+        title=f"🏆 {tournament_name} Registered Teams",
+        description=instructions,
+        color=discord.Color.gold(),
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text="Nexus Esports | Registered Teams")
+    await post_channel.send(embed=embed)
+    await interaction.response.send_message(
+        embed=create_embed(
+            title="Collecting TEAMS as per your preferences!",
+            description=f"posted in {post_channel.mention}. Teams will be posted in {registered_channel.mention}.",
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
 
 # Utility Commands
 @bot.tree.command(name="add-link", description="Add link professionally")
