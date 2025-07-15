@@ -467,81 +467,77 @@ async def check_social_updates():
                         )
                         embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
                         embed.set_image(url=live_thumb)
-                        channel = bot.get_channel(int(tracker['post_channel']))
-                        if channel:
-                            await channel.send(
-                                content="@everyone",
                                 embed=embed,
                                 allowed_mentions=discord.AllowedMentions(everyone=True)
-                            )
-                        tracker['last_live_video_id'] = live_video_id
-                        tracker['last_live_notify_time'] = datetime.utcnow().timestamp()
-                        tracker['last_update_time'] = datetime.utcnow().timestamp()
-                        save_social_trackers()
-        except Exception as e:
-            # Use logging for better production practice, but keep error visible
-            import logging
-            logging.error(f"⚠️ Error in live stream check: {e}")
-
-    # 2. Check for subscriber and video updates (less frequent, batch by channel)
-    for channel_id, tracker_list in channel_map.items():
-        try:
-            # Only one API call per channel for stats
-            request = youtube_service.channels().list(
-                part='statistics,snippet',
-                id=channel_id
-            )
-            response = request.execute()
-            if not response.get('items'):
-                print(f"[YouTube] No channel found for ID: {channel_id}")
-                continue
-            channel_info = response['items'][0]
-            stats = channel_info['statistics']
-            snippet = channel_info['snippet']
-            channel_name = snippet['title']
-
-            # Only one API call per channel for latest video
-            video_request = youtube_service.search().list(
-                part="snippet",
-                channelId=channel_id,
-                order="date",
-                maxResults=1,
-                type="video"
-            )
-            video_response = video_request.execute()
-
-            for guild_id, tracker in tracker_list:
-                tracker['last_check_time'] = datetime.utcnow().timestamp()
-                # Subscriber count
-                sub_count_raw = stats.get('subscriberCount')
                 current_subs = tracker.get('last_count', 0)
                 if sub_count_raw and sub_count_raw.isdigit():
-                    current_subs = int(sub_count_raw)
-                last_subs = tracker.get('last_count', 0)
-                if isinstance(last_subs, int) and current_subs > last_subs:
-                    tracker['last_count'] = current_subs
-                    channel = bot.get_channel(int(tracker['post_channel']))
-                    if channel:
-                        embed = discord.Embed(
-                            title="🎉 YouTube Subs update!",
-                            description=(
-                                f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
-                                f"`+{current_subs - last_subs:,}` since last update"
-                            ),
-                            color=discord.Color.red(),
-                            url=tracker['url']
-                        )
-                        embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
-                        embed.set_footer(text="YT Updates")
-                        await channel.send(embed=embed)
+    channel = member.guild.get_channel(int(welcome_channel_id))
+    if not channel:
+        return
+    try:
+        # Get banner URL from config or use default
+        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
+        # Get welcome text from config or use default
+        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
+        # Generate custom welcome image (username above member count)
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+        avatar_asset = member.display_avatar.replace(format="png", size=128)
+        avatar_bytes = await avatar_asset.read()
+        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+        width, height = 800, 300
+        bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
+        draw = ImageDraw.Draw(bg)
+        avatar_size = 128
+        mask = Image.new("L", (avatar_size, avatar_size), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+        avatar_img = avatar_img.resize((avatar_size, avatar_size))
+        bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
+        try:
+            font = ImageFont.truetype("arial.ttf", 36)
+        except Exception:
+            font = ImageFont.load_default()
+        username = str(member.display_name)
+        user_w, user_h = draw.textsize(username, font=font)
+        draw.text(((width-user_w)//2, 40+avatar_size+10), username, font=font, fill=(255,255,255,255))
+        msg = f"You are our {member.guild.member_count}th member!"
+        msg_w, msg_h = draw.textsize(msg, font=font)
+        draw.text(((width-msg_w)//2, 40+avatar_size+10+user_h+10), msg, font=font, fill=(255,255,255,255))
+        buf = io.BytesIO()
+        bg.save(buf, format="PNG")
+        buf.seek(0)
+        file = discord.File(buf, filename="welcome.png")
 
-                # Video upload detection (notify for videos <12 hours old)
-                if video_response.get('items'):
-                    latest_video = video_response['items'][0]
-                    video_id = latest_video['id']['videoId']
-                    publish_time = latest_video['snippet']['publishedAt']
+        # First embed: custom image and welcome text
+        embed1 = discord.Embed(
+            description=f"Hey {member.mention}!\n\n```
                     video_time = datetime.fromisoformat(publish_time.replace('Z',''))
                     if (datetime.utcnow() - video_time) < timedelta(hours=12) and tracker.get("last_video_id") != video_id:
+            color=discord.Color(0x3e0000)
+        )
+        embed1.set_image(url="attachment://welcome.png")
+        # Second embed: banner GIF
+        embed2 = discord.Embed()
+        embed2.set_image(url=banner_url)
+        await channel.send(embeds=[embed1, embed2], file=file)
+
+        # Send DM welcome
+        try:
+            welcome_dm = guild_configs[guild_id].get("welcome_dm")
+            dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
+            if welcome_dm:
+                embed = discord.Embed(
+                    description=f"Hey {member.mention}!\n{welcome_dm}",
+                    color=discord.Color(0x3e0000)
+                )
+                if dm_attachment_url:
+                    embed.set_image(url=dm_attachment_url)
+                await member.send(embed=embed)
+        except Exception as e:
+            print(f"Error sending welcome DM: {e}")
+    except Exception as e:
+        print(f"Error in on_member_join: {e}")
                         embed = discord.Embed(
                             title=f"📺 New YouTube upload: {latest_video['snippet']['title']}",
                             url=f"https://youtu.be/{video_id}",
@@ -957,7 +953,8 @@ async def add_tournament_event(interaction: discord.Interaction):
 
         # Embed with image and welcome text
         embed = discord.Embed(
-            description=f"Hey {member.mention}!\n\n```
+            description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```"
+        )
         embed.set_image(url="attachment://welcome.png")
         await channel.send(embed=embed, file=file)
 
@@ -965,39 +962,11 @@ async def add_tournament_event(interaction: discord.Interaction):
         print(f"Error in welcome system: {e}")
         # Fallback to current embed with banner
         embed = discord.Embed(
-            description=f"Hey {member.mention}!\n\n```
+            description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```"
+        )
         embed.set_image(url=banner_url)
         await channel.send(embed=embed)
-                title="📅 Tournament Schedule",
-                description="No upcoming events found.",
-                color=discord.Color.blue()
-            ),
-            ephemeral=True
-        )
-
-    embed = discord.Embed(
-        title="📅 Upcoming Tournament Events",
-        color=discord.Color.orange(),
-        timestamp=datetime.utcnow()
-    )
-
-    for i, event in enumerate(events, 1):
-        event_time = datetime.fromisoformat(event["time"]) + timedelta(hours=5, minutes=30)
-        ping_role = f"<@&{event['ping_role_id']}>" if event.get("ping_role_id") else "None"
-        embed.add_field(
-            name=f"{i}. {event['title']}",
-            value=(
-                f"📝 {event['description']}\n"
-                f"📅 **Time:** <t:{int(event_time.timestamp())}:F>\n"
-                f"📢 **Channel:** <#{event['channel_id']}>\n"
-                f"👥 **Ping:** {ping_role}\n"
-                f"🔔 **Notified:** {'✅' if event.get('notified') else '❌'}"
-            ),
-            inline=False
-        )
-
-    embed.set_footer(text="Nexus Esports | Scheduled Tournament Events")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    # The following code was orphaned and is removed for clarity and correctness.
 
 @bot.tree.command(name="remove-tournament-event", description="Remove a scheduled tournament event")
 @app_commands.describe(index="The number of the event from the list (e.g., 1, 2, 3...)")
@@ -1336,63 +1305,25 @@ async def on_member_join(member: discord.Member):
         return
 
     channel = member.guild.get_channel(int(welcome_channel_id))
+        embed1 = discord.Embed(
+            description=f"Hey {member.mention}!\n\n```
+    guild_id = str(member.guild.id)
+    if guild_id not in guild_configs:
+        return
+
+    welcome_channel_id = guild_configs[guild_id].get("welcome_channel")
+    if not welcome_channel_id:
+        return
+
+    channel = member.guild.get_channel(int(welcome_channel_id))
     if not channel:
         return
 
     try:
         # Get banner URL from config or use default
         banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
-        
         # Get welcome text from config or use default
         welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-        
-        # Create simple embed with welcome text and banner
-        embed = discord.Embed(
-            description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
-            color=discord.Color(0x3e0000)
-        )
-        embed.set_image(url=banner_url)
-        
-    # Try to generate a custom welcome image with fallback
-    try:
-        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
-        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-        from PIL import Image, ImageDraw, ImageFont
-        import io
-        avatar_asset = member.display_avatar.replace(format="png", size=128)
-        avatar_bytes = await avatar_asset.read()
-        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-    # Try to generate a custom welcome image with fallback
-    try:
-        # Get banner URL from config or use default
-        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
-        # Get welcome text from config or use default
-        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-            import io
-            avatar_asset = member.display_avatar.replace(format="png", size=128)
-            avatar_bytes = await avatar_asset.read()
-            avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-            width, height = 800, 300
-            bg = Image.new("RGBA", (width, height), (24, 24, 32, 255))
-            draw = ImageDraw.Draw(bg)
-            avatar_size = 128
-            mask = Image.new("L", (avatar_size, avatar_size), 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
-            avatar_img = avatar_img.resize((avatar_size, avatar_size))
-            bg.paste(avatar_img, ((width-avatar_size)//2, 40), mask)
-            try:
-                font = ImageFont.truetype("arial.ttf", 36)
-            except Exception:
-
-    try:
-        # Get banner URL from config or use default
-        banner_url = guild_configs[guild_id].get("banner_url", DEFAULT_BANNER_URL)
-        # Get welcome text from config or use default
-        welcome_text = guild_configs[guild_id].get("welcome_message", DEFAULT_WELCOME_MESSAGE)
-
         # Generate custom welcome image (username above member count)
         from PIL import Image, ImageDraw, ImageFont
         import io
@@ -1425,12 +1356,33 @@ async def on_member_join(member: discord.Member):
 
         # First embed: custom image and welcome text
         embed1 = discord.Embed(
-            description=f"Hey {member.mention}!\n\n```\n{welcome_text}\n```",
-            color=discord.Color(0x3e0000)
+            description=f"Hey {member.mention}!\n\n```
+        # Second embed: banner GIF
         )
         embed1.set_image(url="attachment://welcome.png")
-        # Second embed: banner GIF
-        embed2 = discord.Embed()
+        embed1 = discord.Embed(
+            description=f"Hey {member.mention}!\n\n```
+        embed2.set_image(url=banner_url)
+            color=discord.Color(0x3e0000)
+        )
+        await channel.send(embeds=[embed1, embed2], file=file)
+
+        # Send DM welcome
+        try:
+            welcome_dm = guild_configs[guild_id].get("welcome_dm")
+            dm_attachment_url = guild_configs[guild_id].get("dm_attachment_url")
+            if welcome_dm:
+                embed = discord.Embed(
+                    description=f"Hey {member.mention}!\n{welcome_dm}",
+                    color=discord.Color(0x3e0000)
+                )
+                if dm_attachment_url:
+                    embed.set_image(url=dm_attachment_url)
+                await member.send(embed=embed)
+        except Exception as e:
+            print(f"Error sending welcome DM: {e}")
+    except Exception as e:
+        print(f"Error in on_member_join: {e}")
         embed2.set_image(url=banner_url)
         await channel.send(embeds=[embed1, embed2], file=file)
 
@@ -1450,26 +1402,6 @@ async def on_member_join(member: discord.Member):
             print(f"Error sending welcome DM: {e}")
     except Exception as e:
         print(f"Error in on_member_join: {e}")
-
-
-async def collect_teams(
-    interaction: discord.Interaction,
-    team_size: int,
-    tournament_name: str,
-    post_channel: discord.TextChannel,
-    registered_channel: discord.TextChannel,
-    team_role: discord.Role,
-    max_slots: int
-):
-    if not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message(
-            embed=create_embed(
-                title="❌ Permission Denied",
-                description="You need 'Manage Server' permission to use this command.",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
         return
 
     guild_id = str(interaction.guild.id)
@@ -1511,6 +1443,7 @@ async def collect_teams(
             color=discord.Color.green()
         ),
         ephemeral=True
+    )
     )
 
 # Utility Commands
