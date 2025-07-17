@@ -188,9 +188,12 @@ async def on_ready():
     print(f"\n🔗 Add bot to other servers using this link (MUST include 'applications.commands' scope):\n{invite_url}\n")
 
     await bot.change_presence(
-        status=discord.Status.online,
-        activity=discord.Game('Watching')
+    status=discord.Status.online,
+    activity=discord.Streaming(
+        name="Nexus Esports",  
+        url="https://youtube.com/@nexus_esports_official"  
     )
+)
     
     if not commands_synced:
         try:
@@ -200,6 +203,25 @@ async def on_ready():
         except Exception as e:
             print(f"❌ Command sync failed: {e}")
     
+    # Prefetch subscriber counts for all tracked YouTube channels on startup
+    for guild_id, trackers in social_trackers.items():
+        for tracker in trackers:
+            if tracker.get('platform') == 'youtube' and youtube_service:
+                try:
+                    request = youtube_service.channels().list(
+                        part='statistics',
+                        id=tracker['channel_id']
+                    )
+                    response = request.execute()
+                    if response.get('items'):
+                        stats = response['items'][0]['statistics']
+                        sub_count_raw = stats.get('subscriberCount')
+                        if sub_count_raw and sub_count_raw.isdigit():
+                            tracker['last_count'] = int(sub_count_raw)
+                except Exception as e:
+                    print(f"[Startup] Error prefetching subs for {tracker.get('account_name', tracker.get('channel_id'))}: {e}")
+    save_social_trackers()
+
     if not hasattr(bot, 'social_task'):
         bot.social_task = bot.loop.create_task(social_update_task())
         print("✅ Started social media tracking task")
@@ -220,6 +242,25 @@ async def on_guild_join(guild):
     try:
         await bot.tree.sync(guild=guild)
         print(f"✅ Synced commands for {guild.name}")
+        # Prefetch subscriber counts for new guild's trackers
+        guild_id = str(guild.id)
+        trackers = social_trackers.get(guild_id, [])
+        for tracker in trackers:
+            if tracker.get('platform') == 'youtube' and youtube_service:
+                try:
+                    request = youtube_service.channels().list(
+                        part='statistics',
+                        id=tracker['channel_id']
+                    )
+                    response = request.execute()
+                    if response.get('items'):
+                        stats = response['items'][0]['statistics']
+                        sub_count_raw = stats.get('subscriberCount')
+                        if sub_count_raw and sub_count_raw.isdigit():
+                            tracker['last_count'] = int(sub_count_raw)
+                except Exception as e:
+                    print(f"[GuildJoin] Error prefetching subs for {tracker.get('account_name', tracker.get('channel_id'))}: {e}")
+        save_social_trackers()
     except Exception as e:
         print(f"❌ Failed to sync commands for {guild.name}: {e}")
 
@@ -429,12 +470,13 @@ async def check_social_updates():
 
 async def social_update_task():
     await bot.wait_until_ready()
+    # Run every 90 seconds for more real-time live detection
     while not bot.is_closed():
         try:
             await check_social_updates()
         except Exception as e:
             print(f"⚠️ Social update error: {e}")
-        await asyncio.sleep(300)
+        await asyncio.sleep(90)
 
 async def event_schedule_notifier():
     await bot.wait_until_ready()
@@ -500,17 +542,16 @@ async def check_youtube_update(guild_id, tracker):
         stats = channel_info['statistics']
         snippet = channel_info['snippet']
         channel_name = snippet['title']
-        
+
         # Update last check time
         tracker['last_check_time'] = datetime.utcnow().timestamp()
-        
+
         # Handle subscriber count
         sub_count_raw = stats.get('subscriberCount')
         current_subs = tracker.get('last_count', 0)
-        
         if sub_count_raw and sub_count_raw.isdigit():
             current_subs = int(sub_count_raw)
-        
+
         # Subscriber milestone check
         last_subs = tracker.get('last_count', 0)
         if isinstance(last_subs, int) and current_subs > last_subs:
@@ -527,10 +568,10 @@ async def check_youtube_update(guild_id, tracker):
                     url=tracker['url']
                 )
                 embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
-                embed.set_footer(text="Nexus Esports Social Tracker")
+                embed.set_footer(text="Nexus Esports YT Updates")
                 await channel.send(embed=embed)
 
-        # Video upload detection (only notify for videos <24 hours old)
+        # Video upload detection (only notify for videos <8 hours old)
         video_request = youtube_service.search().list(
             part="snippet",
             channelId=tracker['channel_id'],
@@ -539,15 +580,15 @@ async def check_youtube_update(guild_id, tracker):
             type="video"
         )
         video_response = video_request.execute()
-        
+
         if video_response.get('items'):
             latest_video = video_response['items'][0]
             video_id = latest_video['id']['videoId']
             publish_time = latest_video['snippet']['publishedAt']
             video_time = datetime.fromisoformat(publish_time.replace('Z',''))
-            
-            # Only notify if video is <24 hours old and not previously notified
-            if (datetime.utcnow() - video_time) < timedelta(hours=24) and tracker.get("last_video_id") != video_id:
+
+            # Only notify if video is <8 hours old and not previously notified
+            if (datetime.utcnow() - video_time) < timedelta(hours=8) and tracker.get("last_video_id") != video_id:
                 embed = discord.Embed(
                     title=f"📺 New YouTube Video: {latest_video['snippet']['title']}",
                     url=f"https://youtu.be/{video_id}",
@@ -558,57 +599,61 @@ async def check_youtube_update(guild_id, tracker):
                 embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
                 embed.add_field(name="Published", value=f"<t:{int(video_time.timestamp())}:R>", inline=True)
                 embed.set_image(url=latest_video['snippet']['thumbnails']['high']['url'])
-                
+
                 channel = bot.get_channel(int(tracker['post_channel']))
                 if channel:
                     await channel.send(embed=embed)
-                
+
                 tracker['last_video_id'] = video_id
 
         # Live stream detection with @everyone ping
-        live_request = youtube_service.search().list(
-            part="snippet",
-            channelId=tracker['channel_id'],
-            eventType="live",
-            type="video",
-            maxResults=1
-        )
-        live_response = live_request.execute()
-        
-        if live_response.get('items'):
-            live_video = live_response['items'][0]
-            live_video_id = live_video['id']['videoId']
-            live_title = live_video['snippet']['title']
-            live_thumb = live_video['snippet']['thumbnails']['high']['url']
-            
-            # Check if this is a new stream or we should re-notify (every 6 hours)
-            last_live_notify = tracker.get('last_live_notify_time', 0)
-            should_notify = (
-                tracker.get('last_live_video_id') != live_video_id or 
-                (datetime.utcnow().timestamp() - last_live_notify) > 21600  # 6 hours
+        # Improved: Only check live status if last notification was >5min ago, and notify within 5min of going live
+        now_ts = datetime.utcnow().timestamp()
+        last_live_notify = tracker.get('last_live_notify_time', 0)
+        # Only check if last notification was >5min ago
+        if (now_ts - last_live_notify) > 300:
+            live_request = youtube_service.search().list(
+                part="snippet",
+                channelId=tracker['channel_id'],
+                eventType="live",
+                type="video",
+                maxResults=1
             )
-            
-            if should_notify:
-                embed = discord.Embed(
-                    title=f"🔴 {tracker['account_name']} is LIVE!",
-                    url=f"https://youtu.be/{live_video_id}",
-                    description=f"{live_title}",
-                    color=discord.Color.red(),
-                    timestamp=datetime.utcnow()
+            live_response = live_request.execute()
+
+            if live_response.get('items'):
+                live_video = live_response['items'][0]
+                live_video_id = live_video['id']['videoId']
+                live_title = live_video['snippet']['title']
+                live_thumb = live_video['snippet']['thumbnails']['high']['url']
+
+                # Notify if new live or last notification >5min ago
+                should_notify = (
+                    tracker.get('last_live_video_id') != live_video_id or 
+                    (now_ts - last_live_notify) > 300
                 )
-                embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
-                embed.set_image(url=live_thumb)
-                
-                channel = bot.get_channel(int(tracker['post_channel']))
-                if channel:
-                    await channel.send(
-                        content="@everyone",  # Ping everyone for live streams
-                        embed=embed,
-                        allowed_mentions=discord.AllowedMentions(everyone=True)
+
+                if should_notify:
+                    embed = discord.Embed(
+                        title=f"🔴 {tracker['account_name']} is LIVE!",
+                        url=f"https://youtu.be/{live_video_id}",
+                        description=f"{live_title}",
+                        color=discord.Color.red(),
+                        timestamp=datetime.utcnow()
                     )
-                
-                tracker['last_live_video_id'] = live_video_id
-                tracker['last_live_notify_time'] = datetime.utcnow().timestamp()
+                    embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                    embed.set_image(url=live_thumb)
+
+                    channel = bot.get_channel(int(tracker['post_channel']))
+                    if channel:
+                        await channel.send(
+                            content="@everyone",  # Ping everyone for live streams
+                            embed=embed,
+                            allowed_mentions=discord.AllowedMentions(everyone=True)
+                        )
+
+                    tracker['last_live_video_id'] = live_video_id
+                    tracker['last_live_notify_time'] = now_ts
 
         # Save updates
         tracker['last_update_time'] = datetime.utcnow().timestamp()
@@ -1552,7 +1597,7 @@ async def list_social_trackers(interaction: discord.Interaction):
             print(f"Error processing tracker {i}: {e}")
             continue
     
-    embed.set_footer(text="Nexus Esports Social Tracker")
+    embed.set_footer(text="Nexus Esports YT Updates")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="remove-social-tracker", description="Remove a social media tracker")
