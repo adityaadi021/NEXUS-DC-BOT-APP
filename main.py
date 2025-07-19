@@ -67,6 +67,21 @@ social_trackers = {}
 active_team_collections = {}
 
 # Helper functions
+def format_duration(start_time_str: str) -> str:
+    """Format stream duration from start time"""
+    if not start_time_str:
+        return "Unknown"
+    
+    start_time = datetime.fromisoformat(start_time_str.replace('Z',''))
+    duration = datetime.utcnow() - start_time
+    
+    hours = duration.seconds // 3600
+    minutes = (duration.seconds % 3600) // 60
+    
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
 def create_embed(title: str = None, description: str = None, color: discord.Color = discord.Color(0x3e0000)) -> discord.Embed:
     """Helper function to create consistent embeds"""
     embed = discord.Embed(
@@ -457,8 +472,59 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 # Background tasks
+async def check_subscriber_counts():
+    """Check daily subscriber counts at 8:00 AM IST"""
+    for guild_id, trackers in social_trackers.items():
+        for tracker in trackers:
+            if tracker['platform'] == 'youtube' and youtube_service:
+                try:
+                    request = youtube_service.channels().list(
+                        part='statistics,snippet',
+                        id=tracker['channel_id']
+                    )
+                    response = request.execute()
+
+                    if not response.get('items'):
+                        continue
+
+                    channel_info = response['items'][0]
+                    stats = channel_info['statistics']
+                    snippet = channel_info['snippet']
+                    channel_name = snippet['title']
+
+                    sub_count_raw = stats.get('subscriberCount')
+                    if sub_count_raw and sub_count_raw.isdigit():
+                        current_subs = int(sub_count_raw)
+                        last_subs = tracker.get('last_count', 0)
+                        
+                        if isinstance(last_subs, int) and current_subs != last_subs:
+                            tracker['last_count'] = current_subs
+                            channel = bot.get_channel(int(tracker['post_channel']))
+                            if channel:
+                                # Calculate daily growth
+                                sub_change = current_subs - last_subs
+                                growth_emoji = "📈" if sub_change > 0 else "📉"
+                                
+                                embed = discord.Embed(
+                                    title=f"📊 Daily YouTube Stats Update",
+                                    description=(
+                                        f"**Channel:** {channel_name}\n"
+                                        f"**Current Subscribers:** {current_subs:,}\n"
+                                        f"**24h Change:** {growth_emoji} {sub_change:+,}\n"
+                                    ),
+                                    color=discord.Color.blue(),
+                                    url=tracker['url']
+                                )
+                                embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
+                                embed.set_footer(text=f"Daily Update • {datetime.utcnow().strftime('%Y-%m-%d')}")
+                                await channel.send(embed=embed)
+
+                except Exception as e:
+                    print(f"[YouTube] Error checking subs for {tracker.get('account_name')}: {e}")
+                await asyncio.sleep(1)  # Brief pause between API calls
+
 async def check_social_updates():
-    """Check all social trackers for updates"""
+    """Check all social trackers for updates (except subscriber counts)"""
     for guild_id, trackers in social_trackers.items():
         for tracker in trackers:
             try:
@@ -470,13 +536,35 @@ async def check_social_updates():
 
 async def social_update_task():
     await bot.wait_until_ready()
-    # Run every 90 seconds for more real-time live detection
+    retry_count = 0
+    last_sub_check = datetime.utcnow()
+    
     while not bot.is_closed():
         try:
+            # Check if it's time for daily subscriber update (8:00 AM IST = 2:30 AM UTC)
+            now = datetime.utcnow()
+            current_time = now.time()
+            target_time = datetime.strptime("02:30:00", "%H:%M:%S").time()
+            
+            # Check if we haven't done today's update and it's past 2:30 AM UTC
+            if last_sub_check.date() < now.date() and current_time >= target_time:
+                await check_subscriber_counts()
+                last_sub_check = now
+                print(f"✅ Daily subscriber counts updated at {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            
+            # Regular live stream and video checks
             await check_social_updates()
+            retry_count = 0  # Reset retry count on successful update
+            
         except Exception as e:
-            print(f"⚠️ Social update error: {e}")
-        await asyncio.sleep(90)
+            retry_count += 1
+            wait_time = min(30 * retry_count, 300)  # Exponential backoff, max 5 minutes
+            print(f"⚠️ Social update error (attempt {retry_count}): {e}")
+            print(f"Waiting {wait_time} seconds before retry...")
+            await asyncio.sleep(wait_time)
+            continue
+            
+        await asyncio.sleep(30)  # Check more frequently for live streams
 
 async def event_schedule_notifier():
     await bot.wait_until_ready()
@@ -546,30 +634,8 @@ async def check_youtube_update(guild_id, tracker):
         # Update last check time
         tracker['last_check_time'] = datetime.utcnow().timestamp()
 
-        # Handle subscriber count
-        sub_count_raw = stats.get('subscriberCount')
-        current_subs = tracker.get('last_count', 0)
-        if sub_count_raw and sub_count_raw.isdigit():
-            current_subs = int(sub_count_raw)
-
-        # Subscriber milestone check
-        last_subs = tracker.get('last_count', 0)
-        if isinstance(last_subs, int) and current_subs > last_subs:
-            tracker['last_count'] = current_subs
-            channel = bot.get_channel(int(tracker['post_channel']))
-            if channel:
-                embed = discord.Embed(
-                    title="🎉 YouTube Milestone Reached!",
-                    description=(
-                        f"**{channel_name}** just hit **{current_subs:,} subscribers**!\n"
-                        f"`+{current_subs - last_subs:,}` since last update"
-                    ),
-                    color=discord.Color.red(),
-                    url=tracker['url']
-                )
-                embed.set_thumbnail(url="https://i.imgur.com/krKzGz0.png")
-                embed.set_footer(text="Nexus Esports YT Updates")
-                await channel.send(embed=embed)
+        # We don't handle subscriber counts here anymore as it's done in daily updates
+        tracker['channel_name'] = channel_name  # Store channel name for other notifications
 
         # Video upload detection (only notify for videos <8 hours old)
         video_request = youtube_service.search().list(
@@ -606,54 +672,112 @@ async def check_youtube_update(guild_id, tracker):
 
                 tracker['last_video_id'] = video_id
 
-        # Live stream detection with @everyone ping
-        # Improved: Only check live status if last notification was >5min ago, and notify within 5min of going live
+        # Enhanced Live stream detection with real-time updates
         now_ts = datetime.utcnow().timestamp()
         last_live_notify = tracker.get('last_live_notify_time', 0)
-        # Only check if last notification was >5min ago
-        if (now_ts - last_live_notify) > 300:
-            live_request = youtube_service.search().list(
-                part="snippet",
-                channelId=tracker['channel_id'],
-                eventType="live",
-                type="video",
-                maxResults=1
+        
+        # Get detailed live stream info
+        live_request = youtube_service.videos().list(
+            part="snippet,liveStreamingDetails,statistics",
+            id=tracker.get('last_live_video_id', '')
+        ) if tracker.get('last_live_video_id') else None
+        
+        live_details = None
+        if live_request:
+            try:
+                live_response = live_request.execute()
+                if live_response.get('items'):
+                    live_details = live_response['items'][0]
+            except Exception as e:
+                print(f"Error getting live details: {e}")
+
+        # Check for new live streams
+        search_request = youtube_service.search().list(
+            part="snippet",
+            channelId=tracker['channel_id'],
+            eventType="live",
+            type="video",
+            maxResults=1
+        )
+        search_response = search_request.execute()
+
+        if search_response.get('items'):
+            live_video = search_response['items'][0]
+            live_video_id = live_video['id']['videoId']
+            live_title = live_video['snippet']['title']
+            live_thumb = live_video['snippet']['thumbnails']['maxres']['url'] if 'maxres' in live_video['snippet']['thumbnails'] else live_video['snippet']['thumbnails']['high']['url']
+            
+            # Get detailed stream info including viewer count
+            video_request = youtube_service.videos().list(
+                part="snippet,liveStreamingDetails,statistics",
+                id=live_video_id
             )
-            live_response = live_request.execute()
-
-            if live_response.get('items'):
-                live_video = live_response['items'][0]
-                live_video_id = live_video['id']['videoId']
-                live_title = live_video['snippet']['title']
-                live_thumb = live_video['snippet']['thumbnails']['high']['url']
-
-                # Notify if new live or last notification >5min ago
+            video_response = video_request.execute()
+            
+            if video_response.get('items'):
+                stream_details = video_response['items'][0]
+                current_viewers = stream_details.get('liveStreamingDetails', {}).get('concurrentViewers', '0')
+                stream_start = stream_details.get('liveStreamingDetails', {}).get('actualStartTime')
+                
+                # Determine if this is a new stream or if we should send an update
                 should_notify = (
-                    tracker.get('last_live_video_id') != live_video_id or 
-                    (now_ts - last_live_notify) > 300
+                    tracker.get('last_live_video_id') != live_video_id or
+                    (now_ts - last_live_notify) > 300  # Update every 5 minutes
                 )
 
                 if should_notify:
+                    # Create rich embed for live notification
                     embed = discord.Embed(
                         title=f"🔴 {tracker['account_name']} is LIVE!",
                         url=f"https://youtu.be/{live_video_id}",
-                        description=f"{live_title}",
+                        description=f"**{live_title}**\n\n" + 
+                                 f"👥 **Current Viewers:** {current_viewers:,}\n" +
+                                 (f"⏰ **Stream Duration:** {format_duration(stream_start)}" if stream_start else ""),
                         color=discord.Color.red(),
                         timestamp=datetime.utcnow()
                     )
+                    
                     embed.add_field(name="Channel", value=tracker['account_name'], inline=True)
+                    if stream_start:
+                        embed.add_field(name="Started", value=f"<t:{int(datetime.fromisoformat(stream_start.replace('Z','')).timestamp())}:R>", inline=True)
+                    
                     embed.set_image(url=live_thumb)
+                    embed.set_footer(text="🎮 Join the stream now!")
 
+                    # Send notification with custom ping settings
                     channel = bot.get_channel(int(tracker['post_channel']))
                     if channel:
+                        ping_type = tracker.get('live_ping_type', 'everyone')  # Default to @everyone
+                        content = {
+                            'everyone': '@everyone',
+                            'here': '@here',
+                            'none': None
+                        }.get(ping_type, '@everyone')
+                        
                         await channel.send(
-                            content="@everyone",  # Ping everyone for live streams
+                            content=content,
                             embed=embed,
-                            allowed_mentions=discord.AllowedMentions(everyone=True)
+                            allowed_mentions=discord.AllowedMentions(everyone=True) if content else None
                         )
 
                     tracker['last_live_video_id'] = live_video_id
                     tracker['last_live_notify_time'] = now_ts
+                    tracker['stream_start_time'] = stream_start  # Track stream start time
+                    
+            else:
+                # If was live but now ended
+                if tracker.get('last_live_video_id'):
+                    tracker['last_live_video_id'] = None
+                    channel = bot.get_channel(int(tracker['post_channel']))
+                    if channel:
+                        await channel.send(
+                            embed=discord.Embed(
+                                title=f"📺 Stream Ended - {tracker['account_name']}",
+                                description="The live stream has ended.",
+                                color=discord.Color.blue(),
+                                timestamp=datetime.utcnow()
+                            )
+                        )
 
         # Save updates
         tracker['last_update_time'] = datetime.utcnow().timestamp()
