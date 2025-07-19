@@ -8,7 +8,18 @@
       "last_count": 0,
       "last_video_id": null,
       "last_live_video_id": null,
-      "post_channel": "1377956982690152549"
+      "last_live_notify_time": 0,
+      "stream_start_time": null,
+      "post_channel": "1377956982690152549",
+      "live_ping_type": "everyone",
+      "notification_settings": {
+        "subscriber_milestones": true,
+        "new_videos": true,
+        "live_streams": true,
+        "stream_updates": true,
+        "stream_end": true
+      },
+      "milestone_thresholds": [100, 1000, 10000, 100000]
     },
     {
       "platform": "youtube",
@@ -18,17 +29,18 @@
       "last_count": 0,
       "last_video_id": null,
       "last_live_video_id": null,
-      "post_channel": "1377956982690152549"
-    },
-    {
-      "platform": "youtube",
-      "url": "https://youtube.com/@therk-freefire",
-      "channel_id": "UC_wkYHUFjD7zUDpeJLWTWaw",
-      "account_name": "THE RK",
-      "last_count": 0,
-      "last_video_id": null,
-      "last_live_video_id": null,
-      "post_channel": "1377956982690152549"
+      "last_live_notify_time": 0,
+      "stream_start_time": null,
+      "post_channel": "1377956982690152549",
+      "live_ping_type": "everyone",
+      "notification_settings": {
+        "subscriber_milestones": true,
+        "new_videos": true,
+        "live_streams": true,
+        "stream_updates": true,
+        "stream_end": true
+      },
+      "milestone_thresholds": [100, 1000, 10000, 100000]
     }
   ]
 }
